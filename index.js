@@ -9,7 +9,7 @@ const app = express();
 app.get('/', (req, res) => {
   res.send('Bot is alive!');
 });
-const listener = app.listen(process.env.PORT || 3000, '127.0.0.1', () => {
+const listener = app.listen(process.env.PORT || 3000, '0.0.0.0', () => {
   console.log('Your app is listening on port ' + listener.address().port);
 });
 

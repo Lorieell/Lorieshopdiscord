@@ -16,19 +16,32 @@ const listener = app.listen(process.env.PORT || 3000, () => {
 });
 
 const OWNER_ID = '1384668812720476318';
-const STAFF_ROLE_ID = ''; // Remplace par l'ID du rôle staff, ou laisse vide si aucun rôle staff
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages] });
+const STAFF_ROLE_ID = ''; // Replace with staff role ID if needed
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
 const SHOPS_FILE = './shops.json';
 const CART_FILE = './cart.json';
 const SHOP_MESSAGES_FILE = './shopMessages.json';
 const STOCK_MESSAGES_FILE = './stockMessages.json';
 
+function normalizeName(name) {
+  return name.toLowerCase().replace(/\s+/g, '-');
+}
+
 function loadData(path) {
-  return fs.existsSync(path) ? JSON.parse(fs.readFileSync(path, 'utf-8')) : {};
+  try {
+    return fs.existsSync(path) ? JSON.parse(fs.readFileSync(path, 'utf-8')) : {};
+  } catch (error) {
+    console.error(`Error loading ${path}:`, error);
+    return {};
+  }
 }
 
 function saveData(path, data) {
-  fs.writeFileSync(path, JSON.stringify(data, null, 2));
+  try {
+    fs.writeFileSync(path, JSON.stringify(data, null, 2));
+  } catch (error) {
+    console.error(`Error saving ${path}:`, error);
+  }
 }
 
 function cleanCart(cartsData, shopsData) {
@@ -37,7 +50,7 @@ function cleanCart(cartsData, shopsData) {
     const cart = cartsData[userId].filter(entry => {
       const shop = shopsData[entry.shop];
       if (!shop) return false;
-      const item = shop.items.find(i => i.name === entry.name);
+      const item = shop.items.find(i => normalizeName(i.name) === normalizeName(entry.name));
       return !!item;
     });
     if (cart.length > 0) cleanedCarts[userId] = cart;
@@ -59,7 +72,7 @@ async function updateCartMessage(channel, userId, cartsData, shopsData) {
     for (const entry of cart) {
       const shop = shopsData[entry.shop];
       if (!shop) continue;
-      const item = shop.items.find(i => i.name === entry.name);
+      const item = shop.items.find(i => normalizeName(i.name) === normalizeName(entry.name));
       if (!item) continue;
       const lineTotal = item.price * entry.quantity;
       totalUSD += lineTotal;
@@ -73,7 +86,7 @@ async function updateCartMessage(channel, userId, cartsData, shopsData) {
       }
       components[Math.floor(validItemIndex / 5)].addComponents(
         new ButtonBuilder()
-          .setCustomId('remove_' + entry.shop + '_' + entry.name)
+          .setCustomId(`remove_${entry.shop}_${normalizeName(entry.name)}`)
           .setLabel('Remove ' + entry.name)
           .setStyle(ButtonStyle.Danger)
       );
@@ -95,9 +108,9 @@ async function updateCartMessage(channel, userId, cartsData, shopsData) {
   const mentionMessage = await channel.send({ content: `<@${userId}>` });
   setTimeout(() => mentionMessage.delete().catch(() => {}), 5000);
 
-  const messages = await channel.messages.fetch({ limit: 1 });
-  const lastMessage = messages.first();
-  if (lastMessage && lastMessage.author.id === client.user.id && lastMessage.content !== `<@${userId}>`) {
+  const messages = await channel.messages.fetch({ limit: 10 });
+  const lastMessage = messages.find(m => m.author.id === client.user.id && m.content !== `<@${userId}>`);
+  if (lastMessage) {
     await lastMessage.edit({ embeds: [embed], components });
   } else {
     await channel.send({ embeds: [embed], components });
@@ -144,13 +157,13 @@ async function updateShopMessage(shopName, shopsData) {
   if (shop.image) stockEmbed.setImage(shop.image);
 
   const menu = new StringSelectMenuBuilder()
-    .setCustomId('shop_select_' + shopName)
+    .setCustomId(`shop_select_${shopName}`)
     .setPlaceholder('--- Choose an item ---')
     .addOptions(
       items.map(i => ({
         label: i.name + (i.quantity === 0 ? ' (Out of stock)' : ''),
         description: 'Price: $' + i.price.toFixed(2) + (i.quantity <= 5 ? ' (Low stock: ' + i.quantity + ')' : ''),
-        value: i.name
+        value: normalizeName(i.name)
       }))
     );
 
@@ -167,6 +180,7 @@ async function updateShopMessage(shopName, shopsData) {
       });
     }
   } catch (error) {
+    console.error(`Error updating shop message for ${shopName}:`, error);
     delete shopMessages[shopName];
     saveData(SHOP_MESSAGES_FILE, shopMessages);
   }
@@ -207,6 +221,7 @@ async function updateStockMessage(shopsData) {
         await message.edit({ embeds: [embed], components: [] });
       }
     } catch (error) {
+      console.error(`Error updating stock message for channel ${channelId}:`, error);
       delete stockMessages[channelId];
     }
   }
@@ -262,10 +277,16 @@ client.once('ready', async () => {
       .setDescription('View and manage your cart'),
     new SlashCommandBuilder()
       .setName('itemstock')
-      .setDescription('View stock of all items across all shops')
+      .setDescription('View stock of all items across all shops'),
+    new SlashCommandBuilder()
+      .setName('deleteitem')
+      .setDescription('Delete an item from the shop')
+      .addStringOption(o => o.setName('shop').setDescription('Shop name').setRequired(true))
+      .addStringOption(o => o.setName('name').setDescription('Item name').setRequired(true))
   ];
 
   await client.application.commands.set(commands);
+  console.log('Slash commands registered successfully.');
 });
 
 client.on('interactionCreate', async interaction => {
@@ -276,30 +297,31 @@ client.on('interactionCreate', async interaction => {
   carts = cleanCart(carts, shops);
 
   if (interaction.isChatInputCommand()) {
+    await interaction.deferReply({ ephemeral: true });
     const cmd = interaction.commandName;
-    if (userId !== OWNER_ID && cmd !== 'cart') {
-      return interaction.reply({ content: '❌ You don\'t have permission.', flags: 64 })
-        .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+    if (userId !== OWNER_ID && cmd !== 'cart' && cmd !== 'shop' && cmd !== 'shoplist' && cmd !== 'itemstock') {
+      await interaction.editReply({ content: '❌ You don\'t have permission.' });
+      return;
     }
 
     if (cmd === 'createshop') {
-      const name = interaction.options.getString('name');
+      const name = normalizeName(interaction.options.getString('name'));
       const image = interaction.options.getString('image') || null;
       if (shops[name]) {
-        return interaction.reply({ content: '❌ Shop **' + name + '** already exists.', flags: 64 })
-          .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+        await interaction.editReply({ content: '❌ Shop **' + name + '** already exists.' });
+        return;
       }
       shops[name] = { items: [], image };
       saveData(SHOPS_FILE, shops);
-      return interaction.reply({ content: '✅ Shop **' + name + '** created.', flags: 64 })
-        .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+      await interaction.editReply({ content: '✅ Shop **' + name + '** created.' });
+      return;
     }
 
     if (cmd === 'deleteshop') {
-      const name = interaction.options.getString('name');
+      const name = normalizeName(interaction.options.getString('name'));
       if (!shops[name]) {
-        return interaction.reply({ content: '❌ Shop **' + name + '** not found.', flags: 64 })
-          .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+        await interaction.editReply({ content: '❌ Shop **' + name + '** not found.' });
+        return;
       }
       delete shops[name];
       saveData(SHOPS_FILE, shops);
@@ -307,31 +329,31 @@ client.on('interactionCreate', async interaction => {
       delete shopMessages[name];
       saveData(SHOP_MESSAGES_FILE, shopMessages);
       await updateStockMessage(shops);
-      return interaction.reply({ content: '🗑️ Shop **' + name + '** deleted.', flags: 64 })
-        .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+      await interaction.editReply({ content: '🗑️ Shop **' + name + '** deleted.' });
+      return;
     }
 
     if (cmd === 'shoplist') {
       const names = Object.keys(shops);
       if (!names.length) {
-        return interaction.reply({ content: '🚫 No shops available.', flags: 64 })
-          .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+        await interaction.editReply({ content: '🚫 No shops available.' });
+        return;
       }
-      return interaction.reply({ content: '📋 Shops: ' + names.map(n => '**' + n + '**').join(', '), flags: 64 })
-        .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+      await interaction.editReply({ content: '📋 Shops: ' + names.map(n => '**' + n + '**').join(', ') });
+      return;
     }
 
     if (cmd === 'shop') {
-      const shopName = interaction.options.getString('name');
+      const shopName = normalizeName(interaction.options.getString('name'));
       const shop = shops[shopName];
       if (!shop) {
-        return interaction.reply({ content: '❌ Shop **' + shopName + '** not found.', flags: 64 })
-          .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+        await interaction.editReply({ content: '❌ Shop **' + shopName + '** not found.' });
+        return;
       }
       const items = shop.items || [];
       if (!items.length) {
-        return interaction.reply({ content: '🚫 Shop **' + shopName + '** is empty.', flags: 64 })
-          .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+        await interaction.editReply({ content: '🚫 Shop **' + shopName + '** is empty.' });
+        return;
       }
 
       const inStockItems = items.filter(i => i.quantity > 0);
@@ -353,13 +375,13 @@ client.on('interactionCreate', async interaction => {
       if (shop.image) stockEmbed.setImage(shop.image);
 
       const menu = new StringSelectMenuBuilder()
-        .setCustomId('shop_select_' + shopName)
+        .setCustomId(`shop_select_${shopName}`)
         .setPlaceholder('--- Choose an item ---')
         .addOptions(
           items.map(i => ({
             label: i.name + (i.quantity === 0 ? ' (Out of stock)' : ''),
             description: 'Price: $' + i.price.toFixed(2) + (i.quantity <= 5 ? ' (Low stock: ' + i.quantity + ')' : ''),
-            value: i.name
+            value: normalizeName(i.name)
           }))
         );
 
@@ -367,49 +389,54 @@ client.on('interactionCreate', async interaction => {
         .setColor('Green')
         .setDescription('Select an item below to view details.');
 
-      const message = await interaction.reply({
+      const message = await interaction.editReply({
         embeds: [stockEmbed, menuEmbed],
-        components: [new ActionRowBuilder().addComponents(menu)],
-        fetchReply: true,
-        flags: 0
+        components: [new ActionRowBuilder().addComponents(menu)]
       });
 
       const shopMessages = loadData(SHOP_MESSAGES_FILE);
       shopMessages[shopName] = { channelId: interaction.channelId, messageId: message.id };
       saveData(SHOP_MESSAGES_FILE, shopMessages);
+      return;
     }
 
     if (cmd === 'additem') {
-      const shopName = interaction.options.getString('shop');
+      const shopName = normalizeName(interaction.options.getString('shop'));
       const shop = shops[shopName];
       const name = interaction.options.getString('name');
+      const normalizedName = normalizeName(name);
       const price = interaction.options.getNumber('price');
       const quantity = interaction.options.getInteger('quantity');
       const image = interaction.options.getString('image') || null;
       if (!shop) {
-        return interaction.reply({ content: '❌ Shop **' + shopName + '** not found.', flags: 64 })
-          .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+        await interaction.editReply({ content: '❌ Shop **' + shopName + '** not found.' });
+        return;
       }
-      shop.items.push({ name, price, quantity, image });
+      if (shop.items.some(i => i.normalizedName === normalizedName)) {
+        await interaction.editReply({ content: '❌ Item **' + name + '** already exists in shop **' + shopName + '**.' });
+        return;
+      }
+      shop.items.push({ name, normalizedName, price, quantity, image });
       saveData(SHOPS_FILE, shops);
       await updateShopMessage(shopName, shops);
       await updateStockMessage(shops);
-      return interaction.reply({ content: '✅ Item **' + name + '** added to shop **' + shopName + '**.', flags: 64 })
-        .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+      await interaction.editReply({ content: '✅ Item **' + name + '** added to shop **' + shopName + '**.' });
+      return;
     }
 
     if (cmd === 'edititem') {
-      const shopName = interaction.options.getString('shop');
+      const shopName = normalizeName(interaction.options.getString('shop'));
       const name = interaction.options.getString('name');
+      const normalizedName = normalizeName(name);
       const shop = shops[shopName];
       if (!shop) {
-        return interaction.reply({ content: '❌ Shop **' + shopName + '** not found.', flags: 64 })
-          .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+        await interaction.editReply({ content: '❌ Shop **' + shopName + '** not found.' });
+        return;
       }
-      const item = shop.items.find(i => i.name === name);
+      const item = shop.items.find(i => i.normalizedName === normalizedName);
       if (!item) {
-        return interaction.reply({ content: '❌ Item **' + name + '** not found.', flags: 64 })
-          .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+        await interaction.editReply({ content: '❌ Item **' + name + '** not found.' });
+        return;
       }
       const price = interaction.options.getNumber('price');
       const quantity = interaction.options.getInteger('quantity');
@@ -420,25 +447,26 @@ client.on('interactionCreate', async interaction => {
       saveData(SHOPS_FILE, shops);
       await updateShopMessage(shopName, shops);
       await updateStockMessage(shops);
-      return interaction.reply({ content: '✅ Item **' + name + '** updated in shop **' + shopName + '**.', flags: 64 })
-        .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+      await interaction.editReply({ content: '✅ Item **' + name + '** updated in shop **' + shopName + '**.' });
+      return;
     }
 
     if (cmd === 'removeitem') {
-      const shopName = interaction.options.getString('shop');
+      const shopName = normalizeName(interaction.options.getString('shop'));
       const name = interaction.options.getString('name');
+      const normalizedName = normalizeName(name);
       const shop = shops[shopName];
       if (!shop) {
-        return interaction.reply({ content: '❌ Shop **' + shopName + '** not found.', flags: 64 })
-          .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+        await interaction.editReply({ content: '❌ Shop **' + shopName + '** not found.' });
+        return;
       }
-      const filtered = shop.items.filter(i => i.name !== name);
+      const filtered = shop.items.filter(i => i.normalizedName !== normalizedName);
       shops[shopName].items = filtered;
       saveData(SHOPS_FILE, shops);
       await updateShopMessage(shopName, shops);
       await updateStockMessage(shops);
-      return interaction.reply({ content: '🗑️ Item **' + name + '** removed from shop **' + shopName + '**.', flags: 64 })
-        .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+      await interaction.editReply({ content: '🗑️ Item **' + name + '** removed from shop **' + shopName + '**.' });
+      return;
     }
 
     if (cmd === 'cart') {
@@ -463,7 +491,7 @@ client.on('interactionCreate', async interaction => {
             userCart.forEach(entry => {
               const shop = shopsData[entry.shop];
               if (shop) {
-                const item = shop.items.find(i => i.name === entry.name);
+                const item = shop.items.find(i => i.normalizedName === normalizeName(entry.name));
                 if (item) item.quantity += entry.quantity;
               }
             });
@@ -479,8 +507,8 @@ client.on('interactionCreate', async interaction => {
         }, 12 * 3600000);
       }
       await updateCartMessage(channel, userId, cartsData, shops);
-      return interaction.reply({ content: '🆗 Your cart has been sent to ' + channel + '.', flags: 64 })
-        .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+      await interaction.editReply({ content: '🆗 Your cart has been sent to ' + channel + '.' });
+      return;
     }
 
     if (cmd === 'itemstock') {
@@ -502,67 +530,95 @@ client.on('interactionCreate', async interaction => {
       } else {
         embed.setDescription('No items in stock.');
       }
-      const message = await interaction.reply({ embeds: [embed], fetchReply: true, flags: 0 });
+      const message = await interaction.editReply({ embeds: [embed] });
       const stockMessages = loadData(STOCK_MESSAGES_FILE);
       stockMessages[interaction.channelId] = message.id;
       saveData(STOCK_MESSAGES_FILE, stockMessages);
+      return;
     }
 
-    return interaction.reply({ content: '❌ Command not recognized.', flags: 64 })
-      .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+    if (cmd === 'deleteitem') {
+      const shopName = normalizeName(interaction.options.getString('shop'));
+      const name = interaction.options.getString('name');
+      const normalizedName = normalizeName(name);
+      const shop = shops[shopName];
+      if (!shop) {
+        await interaction.editReply({ content: '❌ Shop **' + shopName + '** not found.' });
+        return;
+      }
+      const itemIndex = shop.items.findIndex(i => i.normalizedName === normalizedName);
+      if (itemIndex === -1) {
+        await interaction.editReply({ content: '❌ Item **' + name + '** not found in shop **' + shopName + '**.' });
+        return;
+      }
+      shop.items.splice(itemIndex, 1);
+      saveData(SHOPS_FILE, shops);
+      await updateShopMessage(shopName, shops);
+      await updateStockMessage(shops);
+      await interaction.editReply({ content: '🗑️ Item **' + name + '** deleted from shop **' + shopName + '**.' });
+      return;
+    }
+
+    await interaction.editReply({ content: '❌ Command not recognized.' });
+    return;
   }
 
   if (interaction.isStringSelectMenu()) {
     const shopName = interaction.customId.replace('shop_select_', '');
     const shop = shops[shopName];
     if (!shop) {
-      return interaction.reply({ content: '❌ Shop **' + shopName + '** not found.', flags: 64 })
-        .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+      console.error(`Shop not found: ${shopName}, shops:`, Object.keys(shops));
+      await interaction.reply({ content: '❌ Shop **' + shopName + '** not found.', ephemeral: true });
+      return;
     }
-    const item = shop.items.find(i => i.name === interaction.values[0]);
+    const itemName = interaction.values[0];
+    const item = shop.items.find(i => i.normalizedName === itemName);
     if (!item) {
-      return interaction.reply({ content: '❌ Item **' + interaction.values[0] + '** not found.', flags: 64 })
-        .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+      console.error(`Item not found: ${itemName} in shop ${shopName}, items:`, shop.items.map(i => i.normalizedName));
+      await interaction.reply({ content: '❌ Item **' + itemName + '** not found.', ephemeral: true });
+      return;
     }
     const embed = new EmbedBuilder()
       .setColor('Blue')
       .setTitle(item.name)
       .setDescription('Price: $' + item.price.toFixed(2) + '\nStock: ' + item.quantity + (item.quantity === 0 ? ' (Out of stock)' : ''));
     if (item.image) embed.setImage(item.image);
-    return interaction.update({
+    await interaction.update({
       embeds: [embed],
       components: [
         new ActionRowBuilder().addComponents(
           new ButtonBuilder()
-            .setCustomId('add_' + shopName + '_' + item.name)
+            .setCustomId(`add_${shopName}_${item.normalizedName}`)
             .setLabel(item.quantity > 0 ? 'Add to cart' : 'Out of stock')
             .setDisabled(item.quantity === 0)
             .setStyle(ButtonStyle.Primary),
           new ButtonBuilder()
-            .setCustomId('back_' + shopName)
+            .setCustomId(`back_${shopName}`)
             .setLabel('Back')
             .setStyle(ButtonStyle.Secondary)
         )
-      ],
-      flags: 64
+      ]
     });
+    return;
   }
 
   if (interaction.isButton()) {
-    const [action, ...rest] = interaction.customId.split('_');
-    const userIdFromButton = rest[rest.length - 1];
-    const shopName = action === 'buy' || action === 'remove' ? rest[0] : rest.slice(0, -1).join('_');
-    const itemName = action === 'buy' ? null : rest.slice(1, -1).join('_');
+    await interaction.deferReply({ ephemeral: true });
+    const parts = interaction.customId.split('_');
+    const action = parts[0];
+    const shopName = parts[1];
+    const userIdFromButton = action === 'buy' || action === 'cancel' || action === 'sold' || action === 'confirm' ? parts[parts.length - 1] : null;
+    const itemName = action === 'add' || action === 'remove' ? parts.slice(2).join('_') : null;
 
     if (action === 'buy' && interaction.customId.startsWith('buy_cart_')) {
       if (userId !== userIdFromButton) {
-        return interaction.reply({ content: '❌ This is not your cart.', flags: 64 })
-          .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+        await interaction.editReply({ content: '❌ This is not your cart.' });
+        return;
       }
       const cart = carts[userId] || [];
       if (!cart.length) {
-        return interaction.reply({ content: '❌ Your cart is empty.', flags: 64 })
-          .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+        await interaction.editReply({ content: '❌ Your cart is empty.' });
+        return;
       }
 
       const permissionOverwrites = [
@@ -591,7 +647,7 @@ client.on('interactionCreate', async interaction => {
       for (const entry of cart) {
         const shop = shops[entry.shop];
         if (!shop) continue;
-        const item = shop.items.find(i => i.name === entry.name);
+        const item = shop.items.find(i => i.normalizedName === normalizeName(entry.name));
         if (!item) continue;
         const lineTotal = item.price * entry.quantity;
         totalUSD += lineTotal;
@@ -620,25 +676,25 @@ client.on('interactionCreate', async interaction => {
       setTimeout(() => mentionMessage.delete().catch(() => {}), 5000);
 
       await ticketChannel.send({ embeds: [embed], components });
-      return interaction.reply({ content: '✅ Order ticket created: ' + ticketChannel + '.', flags: 64 })
-        .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+      await interaction.editReply({ content: '✅ Order ticket created: ' + ticketChannel + '.' });
+      return;
     }
 
     if (action === 'cancel') {
       if (userId !== userIdFromButton && userId !== OWNER_ID && (!STAFF_ROLE_ID || !interaction.member.roles.cache.has(STAFF_ROLE_ID))) {
-        return interaction.reply({ content: '❌ You don\'t have permission to cancel this order.', flags: 64 })
-          .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+        await interaction.editReply({ content: '❌ You don\'t have permission to cancel this order.' });
+        return;
       }
       const cart = carts[userIdFromButton] || [];
       if (!cart.length) {
-        return interaction.reply({ content: '❌ Cart is empty.', flags: 64 })
-          .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+        await interaction.editReply({ content: '❌ Cart is empty.' });
+        return;
       }
 
       cart.forEach(entry => {
         const shop = shops[entry.shop];
         if (shop) {
-          const item = shop.items.find(i => i.name === entry.name);
+          const item = shop.items.find(i => i.normalizedName === normalizeName(entry.name));
           if (item) item.quantity += entry.quantity;
         }
       });
@@ -656,24 +712,24 @@ client.on('interactionCreate', async interaction => {
       }
       await updateStockMessage(shops);
 
-      return interaction.reply({ content: '🗑️ Order cancelled and stock restored.', flags: 64 })
-        .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+      await interaction.editReply({ content: '🗑️ Order cancelled and stock restored.' });
+      return;
     }
 
     if (action === 'sold') {
       if (userId !== userIdFromButton && userId !== OWNER_ID && (!STAFF_ROLE_ID || !interaction.member.roles.cache.has(STAFF_ROLE_ID))) {
-        return interaction.reply({ content: '❌ You don\'t have permission to mark this order as sold.', flags: 64 })
-          .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+        await interaction.editReply({ content: '❌ You don\'t have permission to mark this order as sold.' });
+        return;
       }
       const cart = carts[userIdFromButton] || [];
       if (!cart.length) {
-        return interaction.reply({ content: '❌ Cart is empty.', flags: 64 })
-          .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+        await interaction.editReply({ content: '❌ Cart is empty.' });
+        return;
       }
 
-      const mentionMessage = await interaction.channel.send({ content: `<@${userIdFromButton}> Veuillez attendre patiemment que votre commande soit préparée.` });
+      const mentionMessage = await interaction.channel.send({ content: `<@${userIdFromButton}> Please wait patiently while your order is being prepared.` });
       setTimeout(() => {
-        mentionMessage.edit({ content: 'Veuillez attendre patiemment que votre commande soit préparée.' }).catch(() => {});
+        mentionMessage.edit({ content: 'Please wait patiently while your order is being prepared.' }).catch(() => {});
       }, 5000);
 
       const components = [
@@ -693,19 +749,19 @@ client.on('interactionCreate', async interaction => {
       }
       await updateStockMessage(shops);
 
-      return interaction.reply({ content: '✅ Order marked as sold, please confirm to finalize.', flags: 64 })
-        .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+      await interaction.editReply({ content: '✅ Order marked as sold, please confirm to finalize.' });
+      return;
     }
 
     if (action === 'confirm' && interaction.customId.startsWith('confirm_final_')) {
       if (userId !== userIdFromButton && userId !== OWNER_ID && (!STAFF_ROLE_ID || !interaction.member.roles.cache.has(STAFF_ROLE_ID))) {
-        return interaction.reply({ content: '❌ You don\'t have permission to finalize this order.', flags: 64 })
-          .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+        await interaction.editReply({ content: '❌ You don\'t have permission to finalize this order.' });
+        return;
       }
       const cart = carts[userIdFromButton] || [];
       if (!cart.length) {
-        return interaction.reply({ content: '❌ Cart is empty.', flags: 64 })
-          .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+        await interaction.editReply({ content: '❌ Cart is empty.' });
+        return;
       }
 
       delete carts[userIdFromButton];
@@ -721,51 +777,54 @@ client.on('interactionCreate', async interaction => {
       }
       await updateStockMessage(shops);
 
-      return interaction.reply({ content: '✅ Order finalized.', flags: 64 })
-        .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+      await interaction.editReply({ content: '✅ Order finalized.' });
+      return;
     }
 
     if (action === 'add') {
       const shop = shops[shopName];
       if (!shop) {
-        return interaction.reply({ content: '❌ Shop **' + shopName + '** not found.', flags: 64 })
-          .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+        console.error(`Shop not found for add: ${shopName}, shops:`, Object.keys(shops));
+        await interaction.editReply({ content: '❌ Shop **' + shopName + '** not found.' });
+        return;
       }
-      const item = shop.items.find(i => i.name === itemName);
+      const item = shop.items.find(i => i.normalizedName === itemName);
       if (!item) {
-        return interaction.reply({ content: '❌ Item **' + itemName + '** not found.', flags: 64 })
-          .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+        console.error(`Item not found for add: ${itemName} in shop ${shopName}, items:`, shop.items.map(i => i.normalizedName));
+        await interaction.editReply({ content: '❌ Item **' + itemName + '** not found.' });
+        return;
       }
       if (!item.quantity) {
-        return interaction.reply({ content: '⚠️ Out of stock.', flags: 64 })
-          .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+        await interaction.editReply({ content: '⚠️ Out of stock.' });
+        return;
       }
       item.quantity--;
       saveData(SHOPS_FILE, shops);
       let userCart = carts[userId] || [];
-      let entry = userCart.find(e => e.shop === shopName && e.name === itemName);
+      let entry = userCart.find(e => e.shop === shopName && e.normalizedName === itemName);
       if (entry) entry.quantity++;
-      else userCart.push({ shop: shopName, name: itemName, quantity: 1 });
+      else userCart.push({ shop: shopName, name: item.name, normalizedName: itemName, quantity: 1 });
       carts[userId] = userCart;
       saveData(CART_FILE, carts);
       const channel = interaction.guild.channels.cache.find(c => c.name === 'cart-' + userId && c.type === ChannelType.GuildText);
       if (channel) await updateCartMessage(channel, userId, carts, shops);
       await updateShopMessage(shopName, shops);
       await updateStockMessage(shops);
-      return interaction.reply({ content: '✅ Item **' + itemName + '** added to cart. Stock: ' + item.quantity, flags: 64 })
-        .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+      await interaction.editReply({ content: '✅ Item **' + item.name + '** added to cart. Stock: ' + item.quantity });
+      return;
     }
 
     if (action === 'back') {
       const shop = shops[shopName];
       if (!shop) {
-        return interaction.reply({ content: '❌ Shop **' + shopName + '** not found.', flags: 64 })
-          .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+        console.error(`Shop not found for back: ${shopName}, shops:`, Object.keys(shops));
+        await interaction.editReply({ content: '❌ Shop **' + shopName + '** not found.' });
+        return;
       }
-      const items = shop.items;
+      const items = shop.items || [];
       if (!items.length) {
-        return interaction.reply({ content: '❌ Shop **' + shopName + '** is empty.', flags: 64 })
-          .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+        await interaction.editReply({ content: '❌ Shop **' + shopName + '** is empty.' });
+        return;
       }
       const inStockItems = items.filter(i => i.quantity > 0);
       const stockEmbed = new EmbedBuilder()
@@ -786,46 +845,48 @@ client.on('interactionCreate', async interaction => {
       if (shop.image) stockEmbed.setImage(shop.image);
 
       const menu = new StringSelectMenuBuilder()
-        .setCustomId('shop_select_' + shopName)
+        .setCustomId(`shop_select_${shopName}`)
         .setPlaceholder('--- Choose an item ---')
         .addOptions(items.map(i => ({
           label: i.name + (i.quantity === 0 ? ' (Out of stock)' : ''),
           description: 'Price: $' + i.price.toFixed(2) + (i.quantity <= 5 ? ' (Low stock: ' + i.quantity + ')' : ''),
-          value: i.name
+          value: i.normalizedName
         })));
       const menuEmbed = new EmbedBuilder()
         .setColor('Green')
         .setDescription('Select an item below to view details.');
 
-      return interaction.update({
+      await interaction.update({
         embeds: [stockEmbed, menuEmbed],
-        components: [new ActionRowBuilder().addComponents(menu)],
-        flags: 64
+        components: [new ActionRowBuilder().addComponents(menu)]
       });
+      return;
     }
 
     if (action === 'remove') {
       const shop = shops[shopName];
       if (!shop) {
-        return interaction.reply({ content: '❌ Shop **' + shopName + '** not found.', flags: 64 })
-          .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+        console.error(`Shop not found for remove: ${shopName}, shops:`, Object.keys(shops));
+        await interaction.editReply({ content: '❌ Shop **' + shopName + '** not found.' });
+        return;
       }
-      const item = shop.items.find(i => i.name === itemName);
+      const item = shop.items.find(i => i.normalizedName === itemName);
       if (!item) {
-        return interaction.reply({ content: '❌ Item **' + itemName + '** not found.', flags: 64 })
-          .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+        console.error(`Item not found for remove: ${itemName} in shop ${shopName}, items:`, shop.items.map(i => i.normalizedName));
+        await interaction.editReply({ content: '❌ Item **' + itemName + '** not found.' });
+        return;
       }
       let userCart = carts[userId] || [];
-      const entry = userCart.find(e => e.shop === shopName && e.name === itemName);
+      const entry = userCart.find(e => e.shop === shopName && e.normalizedName === itemName);
       if (!entry) {
-        return interaction.reply({ content: '❌ Item **' + itemName + '** not in your cart.', flags: 64 })
-          .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+        await interaction.editReply({ content: '❌ Item **' + itemName + '** not in your cart.' });
+        return;
       }
       item.quantity += 1;
       if (entry.quantity > 1) {
         entry.quantity -= 1;
       } else {
-        userCart = userCart.filter(e => !(e.shop === shopName && e.name === itemName));
+        userCart = userCart.filter(e => !(e.shop === shopName && e.normalizedName === itemName));
       }
       if (userCart.length === 0) {
         delete carts[userId];
@@ -838,8 +899,8 @@ client.on('interactionCreate', async interaction => {
       if (channel) await updateCartMessage(channel, userId, carts, shops);
       await updateShopMessage(shopName, shops);
       await updateStockMessage(shops);
-      return interaction.reply({ content: '🗑️ Removed 1 **' + itemName + '** from cart.', flags: 64 })
-        .then(reply => setTimeout(() => reply.delete().catch(() => {}), 5000));
+      await interaction.editReply({ content: '🗑️ Removed 1 **' + item.name + '** from cart.' });
+      return;
     }
   }
 });

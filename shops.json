@@ -1,25 +1,18 @@
 {
-  "GROW A GARDEN": {
+  "A": {
+    "items": [],
+    "image": null
+  },
+  "a": {
     "items": [
       {
-        "name": "Dragon Fly",
-        "price": 4.11,
-        "quantity": 9,
-        "image": "https://cdn.data-system.org/upload/omc2txzzd9q.png"
-      },
-      {
-        "name": "Raccoon",
-        "price": 4.36,
-        "quantity": 11,
-        "image": "https://cdn.data-system.org/upload/7twul2ummvv.png"
-      },
-      {
-        "name": "Butterfly",
-        "price": 4.46,
-        "quantity": 9,
-        "image": "https://cdn.data-system.org/upload/nf9p73qlif.png"
+        "name": "dragonfly",
+        "normalizedName": "dragonfly",
+        "price": 4,
+        "quantity": 2,
+        "image": null
       }
     ],
-    "image": "https://cdn.data-system.org/upload/wy190co442.webp"
+    "image": null
   }
 }

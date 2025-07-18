@@ -1,23 +1,15 @@
+
 name: Ping Render
+
 on:
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: "*/5 * * * *" # Run every 5 minutes
   workflow_dispatch:
+
 jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Vérifier l'URL du bot
+      - name: Ping Render Service
         run: |
-          RESPONSE=$(curl -s -o response.txt -w "%{http_code}" ${{ secrets.RENDER_URL }})
-          if [ "$RESPONSE" -eq 200 ]; then
-            echo "Ping réussi : $RESPONSE"
-            cat response.txt
-            grep -q "Bot is alive!" response.txt && echo "Message 'Bot is alive!' trouvé." || { echo "Erreur : Message 'Bot is alive!' non trouvé."; exit 1; }
-          else
-            echo "Erreur : Le ping a échoué avec le code HTTP $RESPONSE"
-            cat response.txt
-            exit 1
-          fi
-        env:
-          RENDER_URL: ${{ secrets.RENDER_URL }}
+          curl --fail --retry 3 --retry-delay 5 --max-time 30 https://lorieshopdiscord.onrender.com

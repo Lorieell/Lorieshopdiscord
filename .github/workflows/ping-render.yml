@@ -20,4 +20,4 @@ jobs:
             exit 1
           fi
         env:
-          RENDER_URL: ${{ https://lorieshopdiscord.onrender.com }}
+          RENDER_URL: ${{ secrets.RENDER_URL }}

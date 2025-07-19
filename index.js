@@ -33,10 +33,16 @@ const ACCOUNTS_FILE = 'accounts.json';
 const CART_FILE = 'cart.json';
 const SHOP_MESSAGES_FILE = 'shopMessages.json';
 const STOCK_MESSAGES_FILE = 'stockMessages.json';
+const TICKETS_FILE = 'tickets.json';
 
 // ID des catégories
 const CART_CATEGORY_ID = '1396197905244753941';
 const TICKET_CATEGORY_ID = '1396197751083241533';
+
+// Durées d'expiration
+const CART_EXPIRATION_MS = 12 * 60 * 60 * 1000; // 12 heures
+const TICKET_EXPIRATION_MS = 5 * 24 * 60 * 60 * 1000; // 5 jours
+const CHECK_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 
 // Map pour stocker les timeouts des interactions
 const interactionTimeouts = new Map();
@@ -60,6 +66,123 @@ function saveData(filename, data) {
     fs.writeFileSync(filename, JSON.stringify(data, null, 2));
   } catch (error) {
     console.error(`Error saving ${filename}:`, error);
+  }
+}
+
+// Vérification des expirations de panier
+async function checkCartExpiration(guild) {
+  const carts = loadData(CART_FILE);
+  const shops = loadData(SHOPS_FILE);
+  const accounts = loadData(ACCOUNTS_FILE);
+  const currentTime = Date.now();
+
+  for (const [userId, cart] of Object.entries(carts)) {
+    if (!cart || !Array.isArray(cart) || cart.length === 0) continue;
+
+    const timestamp = cart.timestamp || 0;
+    if (currentTime - timestamp > CART_EXPIRATION_MS) {
+      console.log(`Cart for user ${userId} has expired`);
+
+      // Restaurer le stock
+      for (const item of cart) {
+        if (item.type === 'account') {
+          if (accounts[item.shop]?.[item.name]) {
+            accounts[item.shop][item.name].quantity += item.quantity;
+            console.log(`Restored ${item.quantity} to account stock for ${item.name} in ${item.shop}`);
+          }
+        } else {
+          if (shops[item.shop]?.items[item.name]) {
+            shops[item.shop].items[item.name].quantity += item.quantity;
+            console.log(`Restored ${item.quantity} to item stock for ${item.name} in ${item.shop}`);
+          }
+        }
+      }
+
+      // Vider le panier
+      carts[userId] = [];
+      saveData(CART_FILE, carts);
+      saveData(SHOPS_FILE, shops);
+      saveData(ACCOUNTS_FILE, accounts);
+
+      // Mettre à jour le canal du panier
+      const cartChannel = guild.channels.cache.find(ch => ch.name === `cart-${userId}`);
+      if (cartChannel) {
+        await updateCartDisplay(cartChannel, userId);
+      }
+
+      // Envoyer un DM à l'utilisateur
+      try {
+        const user = await client.users.fetch(userId);
+        await user.send('❌ Your cart has been removed due to inactivity (12 hours). Please add items again if needed.');
+        console.log(`Sent expiration DM to user ${userId}`);
+      } catch (error) {
+        console.error(`Failed to send DM to user ${userId}:`, error);
+      }
+    }
+  }
+}
+
+// Vérification des expirations de ticket
+async function checkTicketExpiration(guild) {
+  const tickets = loadData(TICKETS_FILE);
+  const carts = loadData(CART_FILE);
+  const shops = loadData(SHOPS_FILE);
+  const accounts = loadData(ACCOUNTS_FILE);
+  const currentTime = Date.now();
+
+  for (const [userId, ticket] of Object.entries(tickets)) {
+    const timestamp = ticket.timestamp || 0;
+    if (currentTime - timestamp > TICKET_EXPIRATION_MS) {
+      console.log(`Ticket for user ${userId} has expired`);
+
+      // Restaurer le stock
+      const userCart = carts[userId] || [];
+      for (const item of userCart) {
+        if (item.type === 'account') {
+          if (accounts[item.shop]?.[item.name]) {
+            accounts[item.shop][item.name].quantity += item.quantity;
+            console.log(`Restored ${item.quantity} to account stock for ${item.name} in ${item.shop}`);
+          }
+        } else {
+          if (shops[item.shop]?.items[item.name]) {
+            shops[item.shop].items[item.name].quantity += item.quantity;
+            console.log(`Restored ${item.quantity} to item stock for ${item.name} in ${item.shop}`);
+          }
+        }
+      }
+
+      // Vider le panier
+      carts[userId] = [];
+      saveData(CART_FILE, carts);
+      saveData(SHOPS_FILE, shops);
+      saveData(ACCOUNTS_FILE, accounts);
+
+      // Supprimer le canal du ticket
+      const ticketChannel = guild.channels.cache.find(ch => ch.name === `ticket-${userId}`);
+      if (ticketChannel) {
+        await ticketChannel.delete().catch(error => console.error(`Error deleting ticket channel for ${userId}:`, error));
+        console.log(`Ticket channel deleted for user ${userId} due to expiration`);
+      }
+
+      // Supprimer l'entrée du ticket
+      delete tickets[userId];
+      saveData(TICKETS_FILE, tickets);
+
+      // Mettre à jour le canal du panier
+      const cartChannel = guild.channels.cache.find(ch => ch.name === `cart-${userId}`);
+      if (cartChannel) {
+        await updateCartDisplay(cartChannel, userId);
+      }
+
+      // Envoyer un DM à l'utilisateur
+      try {
+        const user = await client.users.fetch(userId);
+        await user.send('❌ Your ticket has been closed due to inactivity (5 days). Please create a new order if needed.');
+        console.log(`Sent ticket expiration DM to user ${userId}`);
+      } catch (error) {
+        console.error(`Failed to send DM to user ${userId}:`, error);
+      }
+    }
   }
 }
 
@@ -495,6 +618,11 @@ async function createTicketChannel(guild, userId, cartData) {
   });
   console.log(`Ticket channel ${channelName} created successfully`);
 
+  // Enregistrer le timestamp du ticket
+  const tickets = loadData(TICKETS_FILE);
+  tickets[userId] = { timestamp: Date.now() };
+  saveData(TICKETS_FILE, tickets);
+
   // Message de mention
   await channel.send({ content: `<@${userId}>` });
   
@@ -513,7 +641,7 @@ async function updateCartDisplay(channel, userId) {
   const embed = new EmbedBuilder()
     .setTitle('🛒 Your Cart')
     .setColor(0x00AE86)
-    .setFooter({ text: 'LorieSellShopBot | Happy Shopping!' });
+    .setFooter({ text: 'LorieSellShopBot | Items in cart will be removed after 12 hours.' });
 
   if (globalImage) {
     embed.setThumbnail(globalImage);
@@ -670,6 +798,19 @@ client.once('ready', async () => {
   } catch (error) {
     console.error('Error registering commands:', error);
   }
+
+  // Lancer la vérification périodique des expirations
+  setInterval(async () => {
+    try {
+      const guild = client.guilds.cache.first();
+      if (guild) {
+        await checkCartExpiration(guild);
+        await checkTicketExpiration(guild);
+      }
+    } catch (error) {
+      console.error('Error in expiration check:', error);
+    }
+  }, CHECK_INTERVAL_MS);
 });
 
 client.on('interactionCreate', async interaction => {
@@ -831,6 +972,9 @@ client.on('interactionCreate', async interaction => {
           });
         }
 
+        // Mettre à jour le timestamp du panier
+        carts[interaction.user.id].timestamp = Date.now();
+
         shops[shopName].items[itemName].quantity -= 1;
         saveData(SHOPS_FILE, shops);
         saveData(CART_FILE, carts);
@@ -881,6 +1025,9 @@ client.on('interactionCreate', async interaction => {
             type: 'account'
           });
         }
+
+        // Mettre à jour le timestamp du panier
+        carts[interaction.user.id].timestamp = Date.now();
 
         accounts[shopName][accountName].quantity -= 1;
         saveData(ACCOUNTS_FILE, accounts);
@@ -961,6 +1108,8 @@ client.on('interactionCreate', async interaction => {
           userCart.splice(itemIndex, 1);
         }
         
+        // Mettre à jour le timestamp du panier
+        carts[interaction.user.id].timestamp = Date.now();
         carts[interaction.user.id] = userCart;
         saveData(CART_FILE, carts);
 
@@ -1019,6 +1168,11 @@ client.on('interactionCreate', async interaction => {
         carts[interaction.user.id] = [];
         saveData(CART_FILE, carts);
 
+        // Supprimer l'entrée du ticket
+        const tickets = loadData(TICKETS_FILE);
+        delete tickets[interaction.user.id];
+        saveData(TICKETS_FILE, tickets);
+
         // Supprimer le ticket
         await interaction.channel.delete();
         console.log(`Ticket channel deleted for user ${interaction.user.id}`);
@@ -1051,6 +1205,11 @@ client.on('interactionCreate', async interaction => {
         const carts = loadData(CART_FILE);
         carts[userId] = [];
         saveData(CART_FILE, carts);
+
+        // Supprimer l'entrée du ticket
+        const tickets = loadData(TICKETS_FILE);
+        delete tickets[userId];
+        saveData(TICKETS_FILE, tickets);
 
         // Mettre à jour le cart channel si ouvert
         const cartChannel = interaction.guild.channels.cache.find(ch => ch.name === `cart-${userId}`);

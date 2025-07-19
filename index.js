@@ -34,6 +34,10 @@ const CART_FILE = 'cart.json';
 const SHOP_MESSAGES_FILE = 'shopMessages.json';
 const STOCK_MESSAGES_FILE = 'stockMessages.json';
 
+// ID des catégories
+const CART_CATEGORY_ID = '1396197905244753941';
+const TICKET_CATEGORY_ID = '1396197751083241533';
+
 // Map pour stocker les timeouts des interactions
 const interactionTimeouts = new Map();
 
@@ -434,9 +438,11 @@ async function getOrCreateCartChannel(guild, userId) {
   let channel = guild.channels.cache.find(ch => ch.name === channelName);
   
   if (!channel) {
+    console.log(`Creating cart channel ${channelName} in category ${CART_CATEGORY_ID}`);
     channel = await guild.channels.create({
       name: channelName,
       type: 0,
+      parent: CART_CATEGORY_ID,
       permissionOverwrites: [
         {
           id: guild.roles.everyone.id,
@@ -452,6 +458,7 @@ async function getOrCreateCartChannel(guild, userId) {
         }
       ]
     });
+    console.log(`Cart channel ${channelName} created successfully`);
   }
   
   return channel;
@@ -462,12 +469,15 @@ async function createTicketChannel(guild, userId, cartData) {
   let channel = guild.channels.cache.find(ch => ch.name === channelName);
   
   if (channel) {
+    console.log(`Deleting existing ticket channel ${channelName}`);
     await channel.delete().catch(error => console.error(`Error deleting existing ticket channel:`, error));
   }
 
+  console.log(`Creating ticket channel ${channelName} in category ${TICKET_CATEGORY_ID}`);
   channel = await guild.channels.create({
     name: channelName,
     type: 0,
+    parent: TICKET_CATEGORY_ID,
     permissionOverwrites: [
       {
         id: guild.roles.everyone.id,
@@ -483,6 +493,7 @@ async function createTicketChannel(guild, userId, cartData) {
       }
     ]
   });
+  console.log(`Ticket channel ${channelName} created successfully`);
 
   // Message de mention
   await channel.send({ content: `<@${userId}>` });
@@ -1028,14 +1039,14 @@ client.on('interactionCreate', async interaction => {
       }
 
       if (interaction.customId === 'confirm_order') {
-        if (!isOwner(interaction.user.id)) {
-          const reply = await interaction.reply({ content: '❌ Only the shop owner can confirm an order.', ephemeral: true });
+        const userId = interaction.channel.name.replace('ticket-', '');
+        if (interaction.user.id !== userId) {
+          const reply = await interaction.reply({ content: '❌ Only the ticket owner can confirm the order.', ephemeral: true });
           setTimeout(() => reply.delete().catch(() => {}), 3000);
           return;
         }
 
-        const userId = interaction.channel.name.replace('ticket-', '');
-        
+        console.log(`Processing confirm_order for user ${userId} by ${interaction.user.id}`);
         // Vider le panier
         const carts = loadData(CART_FILE);
         carts[userId] = [];
@@ -1049,6 +1060,7 @@ client.on('interactionCreate', async interaction => {
 
         // Supprimer le ticket
         await interaction.channel.delete();
+        console.log(`Ticket channel deleted for user ${userId} after confirmation`);
       }
     }
 
@@ -1291,15 +1303,22 @@ client.on('interactionCreate', async interaction => {
         }
 
         case 'cart': {
-          const cartChannel = await getOrCreateCartChannel(interaction.guild, interaction.user.id);
-          await updateCartDisplay(cartChannel, interaction.user.id);
-          
-          // Message éphémère avec mention
-          const reply = await interaction.reply({ 
-            content: `✅ Your cart has been created here ${cartChannel} <@${interaction.user.id}>`, 
-            ephemeral: true 
-          });
-          setTimeout(() => reply.delete().catch(() => {}), 5000);
+          try {
+            console.log(`User ${user.id} is attempting to use /cart`);
+            const cartChannel = await getOrCreateCartChannel(interaction.guild, interaction.user.id);
+            await updateCartDisplay(cartChannel, interaction.user.id);
+            
+            const reply = await interaction.reply({ 
+              content: `✅ Your cart has been created here ${cartChannel} <@${interaction.user.id}>`, 
+              ephemeral: true 
+            });
+            console.log(`Cart channel ${cartChannel.name} created or accessed for user ${user.id}`);
+            setTimeout(() => reply.delete().catch(() => {}), 5000);
+          } catch (error) {
+            console.error(`Error processing /cart for user ${user.id}:`, error);
+            const reply = await interaction.reply({ content: '❌ An error occurred while accessing your cart.', ephemeral: true });
+            setTimeout(() => reply.delete().catch(() => {}), 5000);
+          }
           break;
         }
 

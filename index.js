@@ -857,7 +857,7 @@ async function updateShopMessages(shopName) {
   const shops = loadData(SHOPS_FILE);
   const accounts = loadData(ACCOUNTS_FILE);
   for (const [messageId, storedShopName] of Object.entries(shopMessages)) {
-    if (storedShopName === shopName) {
+    if (storedShopName === shopName && messageId !== 'channelId') {
       const channel = await client.channels.fetch(shopMessages.channelId).catch(() => null);
       if (channel) {
         const message = await channel.messages.fetch(messageId).catch(() => null);
@@ -929,12 +929,12 @@ client.once('ready', async () => {
   
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
   try {
-    console.log('Registering slash commands at ${new Date().toLocaleString()}...');
+    console.log(`Registering slash commands at ${new Date().toLocaleString()}...`);
     await rest.put(
       Routes.applicationCommands(client.user.id),
       { body: commands }
     );
-    console.log('Slash commands registered successfully at ${new Date().toLocaleString()}!');
+    console.log(`Slash commands registered successfully at ${new Date().toLocaleString()}!`);
   } catch (error) {
     console.error('Error registering commands:', error);
   }
@@ -960,8 +960,7 @@ client.on('interactionCreate', async interaction => {
         const [type, shopName, itemName] = interaction.values[0].split(':');
         
         if (interaction.values[0] === 'no_items') {
-          await interaction.reply({ content: '❌ No items available in this shop.', flags: 64 });
-          setTimeout(() => interaction.deleteReply().catch(() => {}), 3000);
+          await interaction.reply({ content: '❌ No items available in this shop.', ephemeral: true });
           return;
         }
 
@@ -970,8 +969,7 @@ client.on('interactionCreate', async interaction => {
         const item = shop?.items[itemName];
 
         if (!item) {
-          await interaction.reply({ content: '❌ This item is no longer available.', flags: 64 });
-          setTimeout(() => interaction.deleteReply().catch(() => {}), 3000);
+          await interaction.reply({ content: '❌ This item is no longer available.', ephemeral: true });
           return;
         }
 
@@ -991,40 +989,14 @@ client.on('interactionCreate', async interaction => {
               .setEmoji('⬅️')
           );
 
-        await interaction.update({ embeds: [itemEmbed], components: [row] });
-
-        const timeoutId = setTimeout(async () => {
-          try {
-            if (!interaction.isReplied() && !interaction.isDeferred()) return;
-            const shops = loadData(SHOPS_FILE);
-            const shop = shops[shopName];
-            const embed = generateShopEmbed(shopName, shop);
-            const selectMenu = generateSelectMenu(shopName, shop);
-            const accountSelectMenu = generateAccountSelectMenu(shopName);
-            const refreshButton = new ActionRowBuilder()
-              .addComponents(
-                new ButtonBuilder()
-                  .setCustomId(`refresh_shop:${shopName}`)
-                  .setLabel('Refresh')
-                  .setStyle(ButtonStyle.Primary)
-                  .setEmoji('🔄')
-              );
-            await interaction.editReply({ embeds: [embed], components: [selectMenu, accountSelectMenu, refreshButton] });
-            interactionTimeouts.delete(interaction.id);
-          } catch (error) {
-            console.error('Error in auto-back timeout:', error);
-          }
-        }, 30000);
-
-        interactionTimeouts.set(interaction.id, timeoutId);
+        await interaction.reply({ embeds: [itemEmbed], components: [row], ephemeral: true });
       }
 
       if (interaction.customId === 'select_account') {
         const [type, shopName, accountName] = interaction.values[0].split(':');
         
         if (interaction.values[0] === 'no_accounts') {
-          await interaction.reply({ content: '❌ No accounts available in this shop.', flags: 64 });
-          setTimeout(() => interaction.deleteReply().catch(() => {}), 3000);
+          await interaction.reply({ content: '❌ No accounts available in this shop.', ephemeral: true });
           return;
         }
 
@@ -1032,8 +1004,7 @@ client.on('interactionCreate', async interaction => {
         const account = accounts[shopName]?.[accountName];
 
         if (!account) {
-          await interaction.reply({ content: '❌ This account is no longer available.', flags: 64 });
-          setTimeout(() => interaction.deleteReply().catch(() => {}), 3000);
+          await interaction.reply({ content: '❌ This account is no longer available.', ephemeral: true });
           return;
         }
 
@@ -1053,32 +1024,7 @@ client.on('interactionCreate', async interaction => {
               .setEmoji('⬅️')
           );
 
-        await interaction.update({ embeds: [accountEmbed], components: [row] });
-
-        const timeoutId = setTimeout(async () => {
-          try {
-            if (!interaction.isReplied() && !interaction.isDeferred()) return;
-            const shops = loadData(SHOPS_FILE);
-            const shop = shops[shopName];
-            const embed = generateShopEmbed(shopName, shop);
-            const selectMenu = generateSelectMenu(shopName, shop);
-            const accountSelectMenu = generateAccountSelectMenu(shopName);
-            const refreshButton = new ActionRowBuilder()
-              .addComponents(
-                new ButtonBuilder()
-                  .setCustomId(`refresh_shop:${shopName}`)
-                  .setLabel('Refresh')
-                  .setStyle(ButtonStyle.Primary)
-                  .setEmoji('🔄')
-              );
-            await interaction.editReply({ embeds: [embed], components: [selectMenu, accountSelectMenu, refreshButton] });
-            interactionTimeouts.delete(interaction.id);
-          } catch (error) {
-            console.error('Error in auto-back timeout:', error);
-          }
-        }, 30000);
-
-        interactionTimeouts.set(interaction.id, timeoutId);
+        await interaction.reply({ embeds: [accountEmbed], components: [row], ephemeral: true });
       }
     }
 
@@ -1089,7 +1035,7 @@ client.on('interactionCreate', async interaction => {
       }
 
       if (interaction.customId.startsWith('add_to_cart_item:')) {
-        await interaction.deferUpdate();
+        await interaction.deferReply({ ephemeral: true });
         const [_, shopName, itemName] = interaction.customId.split(':');
         
         const shops = loadData(SHOPS_FILE);
@@ -1097,8 +1043,7 @@ client.on('interactionCreate', async interaction => {
         const item = shop?.items[itemName];
 
         if (!item || item.quantity <= 0) {
-          await interaction.editReply({ content: '❌ This item is no longer available.', flags: 64 });
-          setTimeout(() => interaction.deleteReply().catch(() => {}), 3000);
+          await interaction.followUp({ content: '❌ This item is no longer available.', ephemeral: true });
           return;
         }
 
@@ -1136,20 +1081,18 @@ client.on('interactionCreate', async interaction => {
 
         await updateShopMessages(shopName).catch(err => console.error(`Error updating shop messages:`, err));
 
-        await interaction.editReply({ content: `✅ Your item has been added to cart! Use /cart to purchase it.`, flags: 64 });
-        setTimeout(() => interaction.deleteReply().catch(() => {}), 6000);
+        await interaction.followUp({ content: `✅ Your item has been added to cart! Use /cart to purchase it.`, ephemeral: true });
       }
 
       if (interaction.customId.startsWith('add_to_cart_account:')) {
-        await interaction.deferUpdate();
+        await interaction.deferReply({ ephemeral: true });
         const [_, shopName, accountName] = interaction.customId.split(':');
         
         const accounts = loadData(ACCOUNTS_FILE);
         const account = accounts[shopName]?.[accountName];
 
         if (!account || account.quantity <= 0) {
-          await interaction.editReply({ content: '❌ This account is no longer available.', flags: 64 });
-          setTimeout(() => interaction.deleteReply().catch(() => {}), 3000);
+          await interaction.followUp({ content: '❌ This account is no longer available.', ephemeral: true });
           return;
         }
 
@@ -1187,19 +1130,17 @@ client.on('interactionCreate', async interaction => {
 
         await updateShopMessages(shopName).catch(err => console.error(`Error updating shop messages:`, err));
 
-        await interaction.editReply({ content: `✅ Your account has been added to cart! Use /cart to purchase it.`, flags: 64 });
-        setTimeout(() => interaction.deleteReply().catch(() => {}), 6000);
+        await interaction.followUp({ content: `✅ Your account has been added to cart! Use /cart to purchase it.`, ephemeral: true });
       }
 
       if (interaction.customId.startsWith('back_to_shop:')) {
-        await interaction.deferUpdate();
+        await interaction.deferReply({ ephemeral: true });
         const [_, shopName] = interaction.customId.split(':');
         const shops = loadData(SHOPS_FILE);
         const shop = shops[shopName];
 
         if (!shop) {
-          await interaction.editReply({ content: '❌ Shop not found.', flags: 64 });
-          setTimeout(() => interaction.deleteReply().catch(() => {}), 3000);
+          await interaction.followUp({ content: '❌ Shop not found.', ephemeral: true });
           return;
         }
 
@@ -1214,7 +1155,7 @@ client.on('interactionCreate', async interaction => {
               .setStyle(ButtonStyle.Primary)
               .setEmoji('🔄')
           );
-        await interaction.editReply({ embeds: [embed], components: [selectMenu, accountSelectMenu, refreshButton] });
+        await interaction.followUp({ embeds: [embed], components: [selectMenu, accountSelectMenu, refreshButton], ephemeral: true });
       }
 
       if (interaction.customId.startsWith('refresh_shop:')) {
@@ -1244,7 +1185,7 @@ client.on('interactionCreate', async interaction => {
       }
 
       if (interaction.customId.startsWith('remove_item:')) {
-        await interaction.deferUpdate();
+        await interaction.deferReply({ ephemeral: true });
         console.log(`Processing remove_item: ${interaction.customId} at ${new Date().toLocaleString()}`);
         const [_, shopName, itemName] = interaction.customId.split(':');
         const carts = loadData(CART_FILE);
@@ -1257,8 +1198,7 @@ client.on('interactionCreate', async interaction => {
 
         if (itemIndex === -1) {
           console.log(`Item ${itemName} not found in cart for user ${interaction.user.id}`);
-          await interaction.editReply({ content: `❌ Item ${itemName} not found in cart.`, flags: 64 });
-          setTimeout(() => interaction.deleteReply().catch(() => {}), 3000);
+          await interaction.followUp({ content: `❌ Item ${itemName} not found in cart.`, ephemeral: true });
           return;
         }
 
@@ -1295,12 +1235,11 @@ client.on('interactionCreate', async interaction => {
         await updateShopMessages(shopName).catch(err => console.error(`Error updating shop messages:`, err));
         console.log(`Cart updated for user ${interaction.user.id} at ${new Date().toLocaleString()}`);
         
-        await interaction.editReply({ content: `✅ Removed one ${itemName} from cart.`, flags: 64 });
-        setTimeout(() => interaction.deleteReply().catch(() => {}), 3000);
+        await interaction.followUp({ content: `✅ Removed one ${itemName} from cart.`, ephemeral: true });
       }
 
       if (interaction.customId === 'buy_cart') {
-        await interaction.deferUpdate();
+        await interaction.deferReply({ ephemeral: true });
         console.log(`Processing buy_cart for user ${interaction.user.id} at ${new Date().toLocaleString()}`);
         const carts = loadData(CART_FILE);
         const userCart = carts[interaction.user.id] || [];
@@ -1308,19 +1247,17 @@ client.on('interactionCreate', async interaction => {
         console.log(`User cart for buy_cart:`, userCart);
         if (userCart.length === 0) {
           console.log(`Cart is empty for user ${interaction.user.id}`);
-          await interaction.editReply({ content: '❌ Your cart is empty.', flags: 64 });
-          setTimeout(() => interaction.deleteReply().catch(() => {}), 3000);
+          await interaction.followUp({ content: '❌ Your cart is empty.', ephemeral: true });
           return;
         }
 
         const ticketChannel = await createTicketChannel(interaction.guild, interaction.user.id, userCart);
         console.log(`Ticket channel created: ${ticketChannel.name} at ${new Date().toLocaleString()}`);
-        await interaction.editReply({ content: `✅ Order created in ${ticketChannel}`, flags: 64 });
-        setTimeout(() => interaction.deleteReply().catch(() => {}), 5000);
+        await interaction.followUp({ content: `✅ Order created in ${ticketChannel}`, ephemeral: true });
       }
 
       if (interaction.customId === 'cancel_order') {
-        await interaction.deferUpdate();
+        await interaction.deferReply({ ephemeral: true });
         console.log(`Processing cancel_order for user ${interaction.user.id} at ${new Date().toLocaleString()}`);
         const carts = loadData(CART_FILE);
         const userCart = carts[interaction.user.id] || [];
@@ -1355,26 +1292,23 @@ client.on('interactionCreate', async interaction => {
       }
 
       if (interaction.customId === 'mark_sold') {
-        await interaction.deferUpdate();
+        await interaction.deferReply({ ephemeral: true });
         if (!isOwner(interaction.user.id)) {
-          await interaction.editReply({ content: '❌ Only the shop owner can mark an order as sold.', flags: 64 });
-          setTimeout(() => interaction.deleteReply().catch(() => {}), 3000);
+          await interaction.followUp({ content: '❌ Only the shop owner can mark an order as sold.', ephemeral: true });
           return;
         }
 
         const userId = interaction.channel.name.replace('ticket-', '');
         await updateTicketDisplay(interaction.channel, userId, 'sold');
         await interaction.channel.send({ content: 'Please wait, your order is being prepared.' });
-        await interaction.editReply({ content: '✅ Order marked as sold.', flags: 64 });
-        setTimeout(() => interaction.deleteReply().catch(() => {}), 3000);
+        await interaction.followUp({ content: '✅ Order marked as sold.', ephemeral: true });
       }
 
       if (interaction.customId === 'confirm_order') {
-        await interaction.deferUpdate();
+        await interaction.deferReply({ ephemeral: true });
         const userId = interaction.channel.name.replace('ticket-', '');
         if (interaction.user.id !== userId) {
-          await interaction.editReply({ content: '❌ Only the ticket owner can confirm the order.', flags: 64 });
-          setTimeout(() => interaction.deleteReply().catch(() => {}), 3000);
+          await interaction.followUp({ content: '❌ Only the ticket owner can confirm the order.', ephemeral: true });
           return;
         }
 
@@ -1401,7 +1335,7 @@ client.on('interactionCreate', async interaction => {
       const { commandName, user } = interaction;
 
       if (commandName !== 'cart' && !isOwner(user.id) && commandName !== 'purgeoutofstock') {
-        await interaction.reply({ content: '❌ Only the shop owner can use this command.', flags: 64 });
+        await interaction.reply({ content: '❌ Only the shop owner can use this command.', ephemeral: true });
         setTimeout(() => interaction.deleteReply().catch(() => {}), 5000);
         return;
       }
@@ -1704,23 +1638,25 @@ client.on('interactionCreate', async interaction => {
 
           const shopMessages = loadData(SHOP_MESSAGES_FILE);
           for (const [messageId, shopName] of Object.entries(shopMessages)) {
-            const channel = await client.channels.fetch(shopMessages.channelId).catch(() => null);
-            if (channel) {
-              const message = await channel.messages.fetch(messageId).catch(() => null);
-              if (message) {
-                const shop = shops[shopName];
-                const embed = generateShopEmbed(shopName, shop);
-                const selectMenu = generateSelectMenu(shopName, shop);
-                const accountSelectMenu = generateAccountSelectMenu(shopName);
-                const refreshButton = new ActionRowBuilder()
-                  .addComponents(
-                    new ButtonBuilder()
-                      .setCustomId(`refresh_shop:${shopName}`)
-                      .setLabel('Refresh')
-                      .setStyle(ButtonStyle.Primary)
-                      .setEmoji('🔄')
-                  );
-                await message.edit({ embeds: [embed], components: [selectMenu, accountSelectMenu, refreshButton] });
+            if (messageId !== 'channelId') {
+              const channel = await client.channels.fetch(shopMessages.channelId).catch(() => null);
+              if (channel) {
+                const message = await channel.messages.fetch(messageId).catch(() => null);
+                if (message) {
+                  const shop = shops[shopName];
+                  const embed = generateShopEmbed(shopName, shop);
+                  const selectMenu = generateSelectMenu(shopName, shop);
+                  const accountSelectMenu = generateAccountSelectMenu(shopName);
+                  const refreshButton = new ActionRowBuilder()
+                    .addComponents(
+                      new ButtonBuilder()
+                        .setCustomId(`refresh_shop:${shopName}`)
+                        .setLabel('Refresh')
+                        .setStyle(ButtonStyle.Primary)
+                        .setEmoji('🔄')
+                    );
+                  await message.edit({ embeds: [embed], components: [selectMenu, accountSelectMenu, refreshButton] });
+                }
               }
             }
           }
@@ -1812,8 +1748,10 @@ client.on('interactionCreate', async interaction => {
           await interaction.deferReply({ ephemeral: true });
           const { itemsPurged, accountsPurged } = await purgeOutOfStock();
           const shopMessages = loadData(SHOP_MESSAGES_FILE);
-          for (const shopName of Object.keys(shopMessages)) {
-            await updateShopMessages(shopName).catch(err => console.error(`Error updating shop messages:`, err));
+          for (const shopName of Object.values(shopMessages)) {
+            if (shopName !== shopMessages.channelId) {
+              await updateShopMessages(shopName).catch(err => console.error(`Error updating shop messages:`, err));
+            }
           }
           await interaction.editReply({ content: `✅ Purged ${itemsPurged} out of stock items and ${accountsPurged} out of stock accounts at ${new Date().toLocaleString()}.` });
           setTimeout(() => interaction.deleteReply().catch(() => {}), 5000);
@@ -1822,14 +1760,14 @@ client.on('interactionCreate', async interaction => {
       }
     }
   } catch (error) {
-    console.error('Error processing interaction at ${new Date().toLocaleString()}:', error, {
+    console.error(`Error processing interaction at ${new Date().toLocaleString()}:`, error, {
       interactionType: interaction.type,
       customId: interaction.isButton() ? interaction.customId : null,
       commandName: interaction.isChatInputCommand() ? interaction.commandName : null,
       userId: interaction.user.id
     });
     if (!interaction.replied && !interaction.deferred) {
-      await interaction.reply({ content: '❌ An error occurred.', flags: 64 }).catch(() => {});
+      await interaction.reply({ content: '❌ An error occurred.', ephemeral: true }).catch(() => {});
     } else if (interaction.deferred) {
       await interaction.editReply({ content: '❌ An error occurred.' }).catch(() => {});
     }
@@ -1838,7 +1776,7 @@ client.on('interactionCreate', async interaction => {
 
 // Vérification du token avant la connexion
 if (!process.env.DISCORD_TOKEN) {
-  console.error('Error: DISCORD_TOKEN not defined in .env at ${new Date().toLocaleString()}');
+  console.error(`Error: DISCORD_TOKEN not defined in .env at ${new Date().toLocaleString()}`);
   process.exit(1);
 }
 

@@ -25,7 +25,7 @@ const client = new Client({
 });
 
 // ID du propriétaire
-const OWNER_ID = process.env.OWNER_ID || 'TON_USER_ID_ICI';
+const OWNER_ID = process.env.OWNER_ID || 'YOUR_USER_ID_HERE';
 
 // Fichiers de base de données
 const SHOPS_FILE = 'shops.json';
@@ -35,16 +35,16 @@ const SHOP_MESSAGES_FILE = 'shopMessages.json';
 const STOCK_MESSAGES_FILE = 'stockMessages.json';
 const TICKETS_FILE = 'tickets.json';
 
-// ID des catégories
+// IDs des catégories
 const CART_CATEGORY_ID = '1396197905244753941';
 const TICKET_CATEGORY_ID = '1396197751083241533';
 
 // Durées d'expiration
 const CART_EXPIRATION_MS = 12 * 60 * 60 * 1000; // 12 heures
-const TICKET_EXPIRATION_MS = 5 * 24 * 60 * 60 * 1000; // 5 jours
+const TICKET_EXPIRATION_MS = 3 * 24 * 60 * 60 * 1000; // 3 jours
 const CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
-// Map pour stocker les timeouts des interactions
+// Map pour stocker les timeouts d'interaction
 const interactionTimeouts = new Map();
 
 // Utilitaires de fichiers
@@ -69,7 +69,7 @@ function saveData(filename, data) {
   }
 }
 
-// Vérification des expirations de panier
+// Vérification de l'expiration du panier
 async function checkCartExpiration(guild) {
   const carts = loadData(CART_FILE);
   const shops = loadData(SHOPS_FILE);
@@ -77,13 +77,13 @@ async function checkCartExpiration(guild) {
   const currentTime = Date.now();
 
   for (const [userId, cart] of Object.entries(carts)) {
-    if (!cart || !Array.isArray(cart) || cart.length === 0) continue;
+    if (!cart || !Array.isArray(cart.items) || cart.items.length === 0) continue;
 
     const timestamp = cart.timestamp || 0;
     if (currentTime - timestamp > CART_EXPIRATION_MS) {
       console.log(`Cart for user ${userId} has expired at ${new Date(currentTime).toLocaleString()}`);
 
-      for (const item of cart) {
+      for (const item of cart.items) {
         if (item.type === 'account') {
           if (accounts[item.shop]?.[item.name]) {
             accounts[item.shop][item.name].quantity += item.quantity;
@@ -97,7 +97,7 @@ async function checkCartExpiration(guild) {
         }
       }
 
-      carts[userId] = [];
+      carts[userId] = { items: [], timestamp: 0 };
       saveData(CART_FILE, carts);
       saveData(SHOPS_FILE, shops);
       saveData(ACCOUNTS_FILE, accounts);
@@ -118,7 +118,7 @@ async function checkCartExpiration(guild) {
   }
 }
 
-// Vérification des expirations de ticket
+// Vérification de l'expiration des tickets
 async function checkTicketExpiration(guild) {
   const tickets = loadData(TICKETS_FILE);
   const carts = loadData(CART_FILE);
@@ -131,7 +131,7 @@ async function checkTicketExpiration(guild) {
     if (currentTime - timestamp > TICKET_EXPIRATION_MS) {
       console.log(`Ticket for user ${userId} has expired at ${new Date(currentTime).toLocaleString()}`);
 
-      const userCart = carts[userId] || [];
+      const userCart = carts[userId]?.items || [];
       for (const item of userCart) {
         if (item.type === 'account') {
           if (accounts[item.shop]?.[item.name]) {
@@ -146,7 +146,7 @@ async function checkTicketExpiration(guild) {
         }
       }
 
-      carts[userId] = [];
+      carts[userId] = { items: [], timestamp: 0 };
       saveData(CART_FILE, carts);
       saveData(SHOPS_FILE, shops);
       saveData(ACCOUNTS_FILE, accounts);
@@ -167,7 +167,7 @@ async function checkTicketExpiration(guild) {
 
       try {
         const user = await client.users.fetch(userId);
-        await user.send(`❌ Your ticket has been closed due to inactivity (5 days) at ${new Date(currentTime).toLocaleString()}. Please create a new order if needed.`);
+        await user.send(`❌ Your ticket has been closed due to inactivity (3 days) at ${new Date(currentTime).toLocaleString()}. Please create a new order if needed.`);
         console.log(`Sent ticket expiration DM to user ${userId} at ${new Date().toLocaleString()}`);
       } catch (error) {
         console.error(`Failed to send DM to user ${userId}:`, error);
@@ -176,7 +176,7 @@ async function checkTicketExpiration(guild) {
   }
 }
 
-// Commandes slash
+// Commandes Slash
 const commands = [
   new SlashCommandBuilder()
     .setName('createshop')
@@ -713,7 +713,7 @@ async function createTicketChannel(guild, userId, cartData) {
 
 async function updateCartDisplay(channel, userId) {
   const carts = loadData(CART_FILE);
-  const userCart = carts[userId] || [];
+  const userCart = carts[userId]?.items || [];
   const shops = loadData(SHOPS_FILE);
   const globalImage = shops.globalImage;
 
@@ -786,7 +786,7 @@ async function updateCartDisplay(channel, userId) {
 
 async function updateTicketDisplay(channel, userId, status = 'pending') {
   const carts = loadData(CART_FILE);
-  const userCart = carts[userId] || [];
+  const userCart = carts[userId]?.items || [];
   const shops = loadData(SHOPS_FILE);
   const globalImage = shops.globalImage;
 
@@ -851,19 +851,25 @@ async function updateTicketDisplay(channel, userId, status = 'pending') {
   }
 }
 
-// Fonction pour mettre à jour les messages de shop en temps réel
+// Fonction pour mettre à jour les messages des boutiques en temps réel
 async function updateShopMessages(shopName) {
   const shopMessages = loadData(SHOP_MESSAGES_FILE);
   const shops = loadData(SHOPS_FILE);
-  const accounts = loadData(ACCOUNTS_FILE);
-  for (const [messageId, storedShopName] of Object.entries(shopMessages)) {
-    if (storedShopName === shopName && messageId !== 'channelId') {
+  for (const [messageId, data] of Object.entries(shopMessages)) {
+    if (data.shopName === shopName && messageId !== 'channelId') {
+      if (!shops[shopName]) {
+        console.log(`Shop ${shopName} not found, skipping update for message ${messageId}`);
+        continue;
+      }
       const channel = await client.channels.fetch(shopMessages.channelId).catch(() => null);
       if (channel) {
         const message = await channel.messages.fetch(messageId).catch(() => null);
         if (message) {
           const shop = shops[shopName];
-          const embed = generateShopEmbed(shopName, shop);
+          const embeds = [generateShopEmbed(shopName, shop)];
+          if (data.bannerImage) {
+            embeds.unshift(generateBannerEmbed(data.bannerImage));
+          }
           const selectMenu = generateSelectMenu(shopName, shop);
           const accountSelectMenu = generateAccountSelectMenu(shopName);
           const refreshButton = new ActionRowBuilder()
@@ -874,7 +880,7 @@ async function updateShopMessages(shopName) {
                 .setStyle(ButtonStyle.Primary)
                 .setEmoji('🔄')
             );
-          await message.edit({ embeds: [embed], components: [selectMenu, accountSelectMenu, refreshButton] });
+          await message.edit({ embeds, components: [selectMenu, accountSelectMenu, refreshButton] });
           console.log(`Updated shop ${shopName} message ${messageId} at ${new Date().toLocaleString()}`);
         }
       }
@@ -882,7 +888,7 @@ async function updateShopMessages(shopName) {
   }
 }
 
-// Fonction pour purger les items et accounts "out of stock"
+// Fonction pour purger les articles et comptes en rupture de stock
 async function purgeOutOfStock() {
   const shops = loadData(SHOPS_FILE);
   const accounts = loadData(ACCOUNTS_FILE);
@@ -890,7 +896,7 @@ async function purgeOutOfStock() {
   let itemsPurged = 0;
   let accountsPurged = 0;
 
-  // Purge des items
+  // Purger les articles
   for (const [shopName, shop] of Object.entries(shops)) {
     if (shopName === 'globalImage') continue;
     for (const [itemName, item] of Object.entries(shop.items || {})) {
@@ -904,7 +910,7 @@ async function purgeOutOfStock() {
     }
   }
 
-  // Purge des accounts
+  // Purger les comptes
   for (const [shopName, shopAccounts] of Object.entries(accounts)) {
     for (const [accountName, account] of Object.entries(shopAccounts)) {
       if (account.quantity <= 0) {
@@ -923,7 +929,7 @@ async function purgeOutOfStock() {
   return { itemsPurged, accountsPurged };
 }
 
-// Event handlers
+// Gestionnaires d'événements
 client.once('ready', async () => {
   console.log(`Bot connected as ${client.user.tag} at ${new Date().toLocaleString()}!`);
   
@@ -939,7 +945,7 @@ client.once('ready', async () => {
     console.error('Error registering commands:', error);
   }
 
-  // Démarrage des vérifications en temps réel
+  // Démarrer les vérifications en temps réel
   setInterval(async () => {
     try {
       const guild = client.guilds.cache.first();
@@ -957,10 +963,11 @@ client.on('interactionCreate', async interaction => {
   try {
     if (interaction.isStringSelectMenu()) {
       if (interaction.customId === 'select_item') {
+        await interaction.deferReply({ ephemeral: true });
         const [type, shopName, itemName] = interaction.values[0].split(':');
         
         if (interaction.values[0] === 'no_items') {
-          await interaction.reply({ content: '❌ No items available in this shop.', ephemeral: true });
+          await interaction.editReply({ content: '❌ No items available in this shop.' });
           return;
         }
 
@@ -969,34 +976,51 @@ client.on('interactionCreate', async interaction => {
         const item = shop?.items[itemName];
 
         if (!item) {
-          await interaction.reply({ content: '❌ This item is no longer available.', ephemeral: true });
+          await interaction.editReply({ content: '❌ This item is no longer available.' });
           return;
         }
 
         const itemEmbed = generateItemEmbed(shopName, itemName, item);
-        const row = new ActionRowBuilder()
+        let components = [];
+
+        if (item.quantity > 0) {
+          const quantityOptions = [];
+          for (let i = 1; i <= item.quantity; i++) {
+            quantityOptions.push({
+              label: `${i}`,
+              value: `${i}`,
+            });
+          }
+
+          const quantitySelect = new ActionRowBuilder()
+            .addComponents(
+              new StringSelectMenuBuilder()
+                .setCustomId(`select_quantity_item:${shopName}:${itemName}`)
+                .setPlaceholder('Select quantity to add to cart')
+                .addOptions(quantityOptions)
+            );
+          components.push(quantitySelect);
+        }
+
+        const backButton = new ActionRowBuilder()
           .addComponents(
-            new ButtonBuilder()
-              .setCustomId(`add_to_cart_item:${shopName}:${itemName}`)
-              .setLabel(item.quantity <= 0 ? 'Out of Stock' : 'Add to Cart')
-              .setStyle(item.quantity <= 0 ? ButtonStyle.Secondary : ButtonStyle.Success)
-              .setEmoji('🛒')
-              .setDisabled(item.quantity <= 0),
             new ButtonBuilder()
               .setCustomId(`back_to_shop:${shopName}`)
               .setLabel('Back')
               .setStyle(ButtonStyle.Secondary)
               .setEmoji('⬅️')
           );
+        components.push(backButton);
 
-        await interaction.reply({ embeds: [itemEmbed], components: [row], ephemeral: true });
+        await interaction.editReply({ embeds: [itemEmbed], components });
       }
 
       if (interaction.customId === 'select_account') {
+        await interaction.deferReply({ ephemeral: true });
         const [type, shopName, accountName] = interaction.values[0].split(':');
         
         if (interaction.values[0] === 'no_accounts') {
-          await interaction.reply({ content: '❌ No accounts available in this shop.', ephemeral: true });
+          await interaction.editReply({ content: '❌ No accounts available in this shop.' });
           return;
         }
 
@@ -1004,27 +1028,152 @@ client.on('interactionCreate', async interaction => {
         const account = accounts[shopName]?.[accountName];
 
         if (!account) {
-          await interaction.reply({ content: '❌ This account is no longer available.', ephemeral: true });
+          await interaction.editReply({ content: '❌ This account is no longer available.' });
           return;
         }
 
         const accountEmbed = generateAccountEmbed(shopName, accountName, account);
-        const row = new ActionRowBuilder()
+        let components = [];
+
+        if (account.quantity > 0) {
+          const quantityOptions = [];
+          for (let i = 1; i <= account.quantity; i++) {
+            quantityOptions.push({
+              label: `${i}`,
+              value: `${i}`,
+            });
+          }
+
+          const quantitySelect = new ActionRowBuilder()
+            .addComponents(
+              new StringSelectMenuBuilder()
+                .setCustomId(`select_quantity_account:${shopName}:${accountName}`)
+                .setPlaceholder('Select quantity to add to cart')
+                .addOptions(quantityOptions)
+            );
+          components.push(quantitySelect);
+        }
+
+        const backButton = new ActionRowBuilder()
           .addComponents(
-            new ButtonBuilder()
-              .setCustomId(`add_to_cart_account:${shopName}:${accountName}`)
-              .setLabel(account.quantity <= 0 ? 'Out of Stock' : 'Add to Cart')
-              .setStyle(account.quantity <= 0 ? ButtonStyle.Secondary : ButtonStyle.Success)
-              .setEmoji('🛒')
-              .setDisabled(account.quantity <= 0),
             new ButtonBuilder()
               .setCustomId(`back_to_shop:${shopName}`)
               .setLabel('Back')
               .setStyle(ButtonStyle.Secondary)
               .setEmoji('⬅️')
           );
+        components.push(backButton);
 
-        await interaction.reply({ embeds: [accountEmbed], components: [row], ephemeral: true });
+        await interaction.editReply({ embeds: [accountEmbed], components });
+      }
+
+      if (interaction.customId.startsWith('select_quantity_item:')) {
+        await interaction.deferReply({ ephemeral: true });
+        const [_, shopName, itemName] = interaction.customId.split(':');
+        const quantity = parseInt(interaction.values[0]);
+
+        const shops = loadData(SHOPS_FILE);
+        const shop = shops[shopName];
+        const item = shop?.items[itemName];
+
+        if (!item || item.quantity < quantity) {
+          await interaction.editReply({ content: '❌ Insufficient stock.' });
+          return;
+        }
+
+        const carts = loadData(CART_FILE);
+        if (!carts[interaction.user.id]) {
+          carts[interaction.user.id] = { items: [], timestamp: Date.now() };
+        }
+
+        const userCart = carts[interaction.user.id].items;
+        const existingItemIndex = userCart.findIndex(
+          cartItem => cartItem.name === itemName && cartItem.shop === shopName && cartItem.type === 'item'
+        );
+
+        if (existingItemIndex !== -1) {
+          userCart[existingItemIndex].quantity += quantity;
+        } else {
+          userCart.push({
+            name: itemName,
+            shop: shopName,
+            price: item.price,
+            quantity: quantity,
+            type: 'item'
+          });
+        }
+
+        carts[interaction.user.id].timestamp = Date.now();
+        shops[shopName].items[itemName].quantity -= quantity;
+        saveData(SHOPS_FILE, shops);
+        saveData(CART_FILE, carts);
+
+        const cartChannel = await getOrCreateCartChannel(interaction.guild, interaction.user.id);
+        await updateCartDisplay(cartChannel, interaction.user.id);
+
+        await updateShopMessages(shopName).catch(err => console.error(`Error updating shop messages:`, err));
+
+        await interaction.editReply({
+          content: `✅ You have added ${quantity} ${itemName} to your cart. Open your cart with /cart.`,
+          embeds: [],
+          components: []
+        });
+
+        setTimeout(() => interaction.deleteReply().catch(() => {}), 5000);
+      }
+
+      if (interaction.customId.startsWith('select_quantity_account:')) {
+        await interaction.deferReply({ ephemeral: true });
+        const [_, shopName, accountName] = interaction.customId.split(':');
+        const quantity = parseInt(interaction.values[0]);
+
+        const accounts = loadData(ACCOUNTS_FILE);
+        const account = accounts[shopName]?.[accountName];
+
+        if (!account || account.quantity < quantity) {
+          await interaction.editReply({ content: '❌ Insufficient stock.' });
+          return;
+        }
+
+        const carts = loadData(CART_FILE);
+        if (!carts[interaction.user.id]) {
+          carts[interaction.user.id] = { items: [], timestamp: Date.now() };
+        }
+
+        const userCart = carts[interaction.user.id].items;
+        const existingItemIndex = userCart.findIndex(
+          cartItem => cartItem.name === accountName && cartItem.shop === shopName && cartItem.type === 'account'
+        );
+
+        if (existingItemIndex !== -1) {
+          userCart[existingItemIndex].quantity += quantity;
+        } else {
+          userCart.push({
+            name: accountName,
+            shop: shopName,
+            price: account.price,
+            quantity: quantity,
+            type: 'account'
+          });
+        }
+
+        carts[interaction.user.id].timestamp = Date.now();
+        accounts[shopName][accountName].quantity -= quantity;
+        saveData(ACCOUNTS_FILE, accounts);
+        saveData(CART_FILE, carts);
+
+        const cartChannel = await getOrCreateCartChannel(interaction.guild, interaction.user.id);
+        await updateCartDisplay(cartChannel, interaction.user.id);
+
+        await updateShopMessages(shopName).catch(err => console.error(`Error updating shop messages:`, err));
+
+        await interaction.editReply({
+          content: `✅ You have added ${quantity} ${accountName} to your cart. Open your cart with /cart.`,
+          embeds: [],
+          components: []
+        });
+
+        setTimeout(() => interaction.deleteReply().catch(() => {}), 5000);
       }
     }
 
@@ -1034,128 +1183,56 @@ client.on('interactionCreate', async interaction => {
         interactionTimeouts.delete(interaction.message.interaction.id);
       }
 
-      if (interaction.customId.startsWith('add_to_cart_item:')) {
-        await interaction.deferReply({ ephemeral: true });
-        const [_, shopName, itemName] = interaction.customId.split(':');
-        
-        const shops = loadData(SHOPS_FILE);
-        const shop = shops[shopName];
-        const item = shop?.items[itemName];
-
-        if (!item || item.quantity <= 0) {
-          await interaction.followUp({ content: '❌ This item is no longer available.', ephemeral: true });
-          return;
-        }
-
-        const carts = loadData(CART_FILE);
-        if (!carts[interaction.user.id]) {
-          carts[interaction.user.id] = [];
-        }
-
-        const existingItemIndex = carts[interaction.user.id].findIndex(
-          cartItem => cartItem.name === itemName && cartItem.shop === shopName && cartItem.type === 'item'
-        );
-
-        if (existingItemIndex !== -1) {
-          carts[interaction.user.id][existingItemIndex].quantity += 1;
-        } else {
-          carts[interaction.user.id].push({
-            name: itemName,
-            shop: shopName,
-            price: item.price,
-            quantity: 1,
-            type: 'item'
-          });
-        }
-
-        carts[interaction.user.id].timestamp = Date.now();
-
-        shops[shopName].items[itemName].quantity -= 1;
-        saveData(SHOPS_FILE, shops);
-        saveData(CART_FILE, carts);
-
-        const cartChannel = interaction.guild.channels.cache.find(ch => ch.name === `cart-${interaction.user.id}`);
-        if (cartChannel) {
-          await updateCartDisplay(cartChannel, interaction.user.id);
-        }
-
-        await updateShopMessages(shopName).catch(err => console.error(`Error updating shop messages:`, err));
-
-        await interaction.followUp({ content: `✅ Your item has been added to cart! Use /cart to purchase it.`, ephemeral: true });
-      }
-
-      if (interaction.customId.startsWith('add_to_cart_account:')) {
-        await interaction.deferReply({ ephemeral: true });
-        const [_, shopName, accountName] = interaction.customId.split(':');
-        
-        const accounts = loadData(ACCOUNTS_FILE);
-        const account = accounts[shopName]?.[accountName];
-
-        if (!account || account.quantity <= 0) {
-          await interaction.followUp({ content: '❌ This account is no longer available.', ephemeral: true });
-          return;
-        }
-
-        const carts = loadData(CART_FILE);
-        if (!carts[interaction.user.id]) {
-          carts[interaction.user.id] = [];
-        }
-
-        const existingItemIndex = carts[interaction.user.id].findIndex(
-          cartItem => cartItem.name === accountName && cartItem.shop === shopName && cartItem.type === 'account'
-        );
-
-        if (existingItemIndex !== -1) {
-          carts[interaction.user.id][existingItemIndex].quantity += 1;
-        } else {
-          carts[interaction.user.id].push({
-            name: accountName,
-            shop: shopName,
-            price: account.price,
-            quantity: 1,
-            type: 'account'
-          });
-        }
-
-        carts[interaction.user.id].timestamp = Date.now();
-
-        accounts[shopName][accountName].quantity -= 1;
-        saveData(ACCOUNTS_FILE, accounts);
-        saveData(CART_FILE, carts);
-
-        const cartChannel = interaction.guild.channels.cache.find(ch => ch.name === `cart-${interaction.user.id}`);
-        if (cartChannel) {
-          await updateCartDisplay(cartChannel, interaction.user.id);
-        }
-
-        await updateShopMessages(shopName).catch(err => console.error(`Error updating shop messages:`, err));
-
-        await interaction.followUp({ content: `✅ Your account has been added to cart! Use /cart to purchase it.`, ephemeral: true });
-      }
-
       if (interaction.customId.startsWith('back_to_shop:')) {
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferUpdate();
+        console.log(`Processing back_to_shop for user ${interaction.user.id} at ${new Date().toLocaleString()}`);
         const [_, shopName] = interaction.customId.split(':');
         const shops = loadData(SHOPS_FILE);
         const shop = shops[shopName];
+        const shopMessages = loadData(SHOP_MESSAGES_FILE);
 
         if (!shop) {
-          await interaction.followUp({ content: '❌ Shop not found.', ephemeral: true });
+          console.log(`Shop ${shopName} not found for user ${interaction.user.id}`);
+          await interaction.editReply({ content: '❌ Shop not found.', components: [] });
+          setTimeout(() => interaction.deleteReply().catch(() => {}), 3000);
           return;
         }
 
-        const embed = generateShopEmbed(shopName, shop);
-        const selectMenu = generateSelectMenu(shopName, shop);
-        const accountSelectMenu = generateAccountSelectMenu(shopName);
-        const refreshButton = new ActionRowBuilder()
-          .addComponents(
-            new ButtonBuilder()
-              .setCustomId(`refresh_shop:${shopName}`)
-              .setLabel('Refresh')
-              .setStyle(ButtonStyle.Primary)
-              .setEmoji('🔄')
-          );
-        await interaction.followUp({ embeds: [embed], components: [selectMenu, accountSelectMenu, refreshButton], ephemeral: true });
+        try {
+          const channel = await client.channels.fetch(shopMessages.channelId).catch(() => null);
+          let bannerImage = null;
+          if (channel) {
+            for (const [messageId, data] of Object.entries(shopMessages)) {
+              if (data.shopName === shopName && messageId !== 'channelId') {
+                bannerImage = data.bannerImage;
+                break;
+              }
+            }
+          }
+
+          const embeds = [generateShopEmbed(shopName, shop)];
+          if (bannerImage) {
+            embeds.unshift(generateBannerEmbed(bannerImage));
+          }
+          const selectMenu = generateSelectMenu(shopName, shop);
+          const accountSelectMenu = generateAccountSelectMenu(shopName);
+          const refreshButton = new ActionRowBuilder()
+            .addComponents(
+              new ButtonBuilder()
+                .setCustomId(`refresh_shop:${shopName}`)
+                .setLabel('Refresh')
+                .setStyle(ButtonStyle.Primary)
+                .setEmoji('🔄')
+            );
+
+          await interaction.editReply({ content: 'Returning to shop', embeds, components: [selectMenu, accountSelectMenu, refreshButton] });
+          setTimeout(() => interaction.deleteReply().catch(() => {}), 3000);
+          console.log(`Updated and scheduled deletion for ephemeral item/account embed for user ${interaction.user.id} in shop ${shopName}`);
+        } catch (error) {
+          console.error(`Error updating ephemeral reply for back_to_shop:`, error);
+          await interaction.editReply({ content: '❌ Failed to return to shop.', components: [] });
+          setTimeout(() => interaction.deleteReply().catch(() => {}), 3000);
+        }
       }
 
       if (interaction.customId.startsWith('refresh_shop:')) {
@@ -1163,14 +1240,26 @@ client.on('interactionCreate', async interaction => {
         const [_, shopName] = interaction.customId.split(':');
         const shops = loadData(SHOPS_FILE);
         const shop = shops[shopName];
+        const shopMessages = loadData(SHOP_MESSAGES_FILE);
 
         if (!shop) {
-          await interaction.editReply({ content: '❌ Shop not found.', flags: 64 });
+          await interaction.editReply({ content: '❌ Shop not found.', ephemeral: true });
           setTimeout(() => interaction.deleteReply().catch(() => {}), 3000);
           return;
         }
 
-        const embed = generateShopEmbed(shopName, shop);
+        let bannerImage = null;
+        for (const [messageId, data] of Object.entries(shopMessages)) {
+          if (data.shopName === shopName && messageId !== 'channelId') {
+            bannerImage = data.bannerImage;
+            break;
+          }
+        }
+
+        const embeds = [generateShopEmbed(shopName, shop)];
+        if (bannerImage) {
+          embeds.unshift(generateBannerEmbed(bannerImage));
+        }
         const selectMenu = generateSelectMenu(shopName, shop);
         const accountSelectMenu = generateAccountSelectMenu(shopName);
         const refreshButton = new ActionRowBuilder()
@@ -1181,7 +1270,7 @@ client.on('interactionCreate', async interaction => {
               .setStyle(ButtonStyle.Primary)
               .setEmoji('🔄')
           );
-        await interaction.editReply({ embeds: [embed], components: [selectMenu, accountSelectMenu, refreshButton] });
+        await interaction.editReply({ embeds, components: [selectMenu, accountSelectMenu, refreshButton] });
       }
 
       if (interaction.customId.startsWith('remove_item:')) {
@@ -1189,7 +1278,7 @@ client.on('interactionCreate', async interaction => {
         console.log(`Processing remove_item: ${interaction.customId} at ${new Date().toLocaleString()}`);
         const [_, shopName, itemName] = interaction.customId.split(':');
         const carts = loadData(CART_FILE);
-        const userCart = carts[interaction.user.id] || [];
+        const userCart = carts[interaction.user.id]?.items || [];
 
         console.log(`User cart:`, userCart);
         const itemIndex = userCart.findIndex(item => 
@@ -1198,7 +1287,7 @@ client.on('interactionCreate', async interaction => {
 
         if (itemIndex === -1) {
           console.log(`Item ${itemName} not found in cart for user ${interaction.user.id}`);
-          await interaction.followUp({ content: `❌ Item ${itemName} not found in cart.`, ephemeral: true });
+          await interaction.followUp({ content: `❌ Item ${itemName} not found in cart.` });
           return;
         }
 
@@ -1228,39 +1317,71 @@ client.on('interactionCreate', async interaction => {
         }
         
         carts[interaction.user.id].timestamp = Date.now();
-        carts[interaction.user.id] = userCart;
+        carts[interaction.user.id].items = userCart;
         saveData(CART_FILE, carts);
 
         await updateCartDisplay(interaction.channel, interaction.user.id);
         await updateShopMessages(shopName).catch(err => console.error(`Error updating shop messages:`, err));
         console.log(`Cart updated for user ${interaction.user.id} at ${new Date().toLocaleString()}`);
         
-        await interaction.followUp({ content: `✅ Removed one ${itemName} from cart.`, ephemeral: true });
+        await interaction.followUp({ content: `✅ Removed one ${itemName} from cart.` });
       }
 
       if (interaction.customId === 'buy_cart') {
         await interaction.deferReply({ ephemeral: true });
         console.log(`Processing buy_cart for user ${interaction.user.id} at ${new Date().toLocaleString()}`);
         const carts = loadData(CART_FILE);
-        const userCart = carts[interaction.user.id] || [];
+        const userCart = carts[interaction.user.id]?.items || [];
 
         console.log(`User cart for buy_cart:`, userCart);
         if (userCart.length === 0) {
           console.log(`Cart is empty for user ${interaction.user.id}`);
-          await interaction.followUp({ content: '❌ Your cart is empty.', ephemeral: true });
+          await interaction.followUp({ content: '❌ Your cart is empty.' });
+          return;
+        }
+
+        const paymentRow = new ActionRowBuilder()
+          .addComponents(
+            new ButtonBuilder()
+              .setLabel('Pay via Payhip')
+              .setURL('https://payhip.com/LorieSell')
+              .setStyle(ButtonStyle.Link),
+            new ButtonBuilder()
+              .setCustomId('pay_paypal')
+              .setLabel('Pay via PayPal')
+              .setStyle(ButtonStyle.Primary)
+              .setEmoji('💳')
+          );
+
+        await interaction.followUp({
+          content: 'Choose your payment method:',
+          components: [paymentRow],
+          ephemeral: true
+        });
+      }
+
+      if (interaction.customId === 'pay_paypal') {
+        await interaction.deferReply({ ephemeral: true });
+        console.log(`Processing pay_paypal for user ${interaction.user.id} at ${new Date().toLocaleString()}`);
+        const carts = loadData(CART_FILE);
+        const userCart = carts[interaction.user.id]?.items || [];
+
+        if (userCart.length === 0) {
+          console.log(`Cart is empty for user ${interaction.user.id}`);
+          await interaction.followUp({ content: '❌ Your cart is empty.' });
           return;
         }
 
         const ticketChannel = await createTicketChannel(interaction.guild, interaction.user.id, userCart);
-        console.log(`Ticket channel created: ${ticketChannel.name} at ${new Date().toLocaleString()}`);
-        await interaction.followUp({ content: `✅ Order created in ${ticketChannel}`, ephemeral: true });
+        console.log(`Ticket channel created: ${ticketChannel.name} for PayPal payment at ${new Date().toLocaleString()}`);
+        await interaction.followUp({ content: `✅ Order created in ${ticketChannel} for PayPal payment. Please proceed with the payment details there.` });
       }
 
       if (interaction.customId === 'cancel_order') {
         await interaction.deferReply({ ephemeral: true });
         console.log(`Processing cancel_order for user ${interaction.user.id} at ${new Date().toLocaleString()}`);
         const carts = loadData(CART_FILE);
-        const userCart = carts[interaction.user.id] || [];
+        const userCart = carts[interaction.user.id]?.items || [];
 
         const shops = loadData(SHOPS_FILE);
         const accounts = loadData(ACCOUNTS_FILE);
@@ -1280,7 +1401,7 @@ client.on('interactionCreate', async interaction => {
         saveData(SHOPS_FILE, shops);
         saveData(ACCOUNTS_FILE, accounts);
 
-        carts[interaction.user.id] = [];
+        carts[interaction.user.id] = { items: [], timestamp: 0 };
         saveData(CART_FILE, carts);
 
         const tickets = loadData(TICKETS_FILE);
@@ -1294,27 +1415,27 @@ client.on('interactionCreate', async interaction => {
       if (interaction.customId === 'mark_sold') {
         await interaction.deferReply({ ephemeral: true });
         if (!isOwner(interaction.user.id)) {
-          await interaction.followUp({ content: '❌ Only the shop owner can mark an order as sold.', ephemeral: true });
+          await interaction.followUp({ content: '❌ Only the shop owner can mark an order as sold.' });
           return;
         }
 
         const userId = interaction.channel.name.replace('ticket-', '');
         await updateTicketDisplay(interaction.channel, userId, 'sold');
         await interaction.channel.send({ content: 'Please wait, your order is being prepared.' });
-        await interaction.followUp({ content: '✅ Order marked as sold.', ephemeral: true });
+        await interaction.followUp({ content: '✅ Order marked as sold.' });
       }
 
       if (interaction.customId === 'confirm_order') {
         await interaction.deferReply({ ephemeral: true });
         const userId = interaction.channel.name.replace('ticket-', '');
         if (interaction.user.id !== userId) {
-          await interaction.followUp({ content: '❌ Only the ticket owner can confirm the order.', ephemeral: true });
+          await interaction.followUp({ content: '❌ Only the ticket owner can confirm the order.' });
           return;
         }
 
         console.log(`Processing confirm_order for user ${userId} by ${interaction.user.id} at ${new Date().toLocaleString()}`);
         const carts = loadData(CART_FILE);
-        carts[userId] = [];
+        carts[userId] = { items: [], timestamp: 0 };
         saveData(CART_FILE, carts);
 
         const tickets = loadData(TICKETS_FILE);
@@ -1396,7 +1517,7 @@ client.on('interactionCreate', async interaction => {
           const shop = shops[name];
 
           if (!shop) {
-            await interaction.editReply({ content: `❌ Shop ${name} not found.`, flags: 64 });
+            await interaction.editReply({ content: `❌ Shop ${name} not found.`, ephemeral: true });
             setTimeout(() => interaction.deleteReply().catch(() => {}), 5000);
             return;
           }
@@ -1415,11 +1536,10 @@ client.on('interactionCreate', async interaction => {
                 .setStyle(ButtonStyle.Primary)
                 .setEmoji('🔄')
             );
-          const response = await interaction.editReply({ embeds: embeds, components: [selectMenu, accountSelectMenu, refreshButton] });
+          const response = await interaction.editReply({ embeds, components: [selectMenu, accountSelectMenu, refreshButton] });
 
-          // Enregistrer le message pour les mises à jour en temps réel
           const shopMessages = loadData(SHOP_MESSAGES_FILE);
-          shopMessages[response.id] = name;
+          shopMessages[response.id] = { shopName: name, bannerImage: bannerImage || null };
           shopMessages.channelId = interaction.channel.id;
           saveData(SHOP_MESSAGES_FILE, shopMessages);
           break;
@@ -1588,7 +1708,7 @@ client.on('interactionCreate', async interaction => {
         case 'accountstock': {
           await interaction.deferReply({ ephemeral: true });
           const embed = new EmbedBuilder()
-            .setTitle('📦 Stock Overview')
+            .setTitle('📦 Account Stock Overview')
             .setColor(0x7289DA)
             .setFooter({ text: `LorieSellShopBot | Last updated: ${new Date().toLocaleString()}` });
 
@@ -1637,25 +1757,28 @@ client.on('interactionCreate', async interaction => {
           saveData(SHOPS_FILE, shops);
 
           const shopMessages = loadData(SHOP_MESSAGES_FILE);
-          for (const [messageId, shopName] of Object.entries(shopMessages)) {
+          for (const [messageId, data] of Object.entries(shopMessages)) {
             if (messageId !== 'channelId') {
               const channel = await client.channels.fetch(shopMessages.channelId).catch(() => null);
               if (channel) {
                 const message = await channel.messages.fetch(messageId).catch(() => null);
                 if (message) {
-                  const shop = shops[shopName];
-                  const embed = generateShopEmbed(shopName, shop);
-                  const selectMenu = generateSelectMenu(shopName, shop);
-                  const accountSelectMenu = generateAccountSelectMenu(shopName);
+                  const shop = shops[data.shopName];
+                  const embeds = [generateShopEmbed(data.shopName, shop)];
+                  if (data.bannerImage) {
+                    embeds.unshift(generateBannerEmbed(data.bannerImage));
+                  }
+                  const selectMenu = generateSelectMenu(data.shopName, shop);
+                  const accountSelectMenu = generateAccountSelectMenu(data.shopName);
                   const refreshButton = new ActionRowBuilder()
                     .addComponents(
                       new ButtonBuilder()
-                        .setCustomId(`refresh_shop:${shopName}`)
+                        .setCustomId(`refresh_shop:${data.shopName}`)
                         .setLabel('Refresh')
                         .setStyle(ButtonStyle.Primary)
                         .setEmoji('🔄')
                     );
-                  await message.edit({ embeds: [embed], components: [selectMenu, accountSelectMenu, refreshButton] });
+                  await message.edit({ embeds, components: [selectMenu, accountSelectMenu, refreshButton] });
                 }
               }
             }
@@ -1748,9 +1871,9 @@ client.on('interactionCreate', async interaction => {
           await interaction.deferReply({ ephemeral: true });
           const { itemsPurged, accountsPurged } = await purgeOutOfStock();
           const shopMessages = loadData(SHOP_MESSAGES_FILE);
-          for (const shopName of Object.values(shopMessages)) {
-            if (shopName !== shopMessages.channelId) {
-              await updateShopMessages(shopName).catch(err => console.error(`Error updating shop messages:`, err));
+          for (const data of Object.values(shopMessages)) {
+            if (data.shopName) {
+              await updateShopMessages(data.shopName).catch(err => console.error(`Error updating shop messages:`, err));
             }
           }
           await interaction.editReply({ content: `✅ Purged ${itemsPurged} out of stock items and ${accountsPurged} out of stock accounts at ${new Date().toLocaleString()}.` });
